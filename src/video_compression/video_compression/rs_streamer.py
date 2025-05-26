@@ -6,6 +6,7 @@ import threading
 import numpy as np
 import zmq
 import time
+import argparse
 
 Gst.init(None)
 
@@ -15,9 +16,13 @@ def main(args=None):
     context = zmq.Context()
     zmq_c_socket = context.socket(zmq.PUB)
     zmq_c_socket.bind("ipc:///tmp/color_frame_queue")
-
     zmq_d_socket = context.socket(zmq.PUB)
     zmq_d_socket.bind("ipc:///tmp/depth_frame_queue")
+    if (args is not None) and args.raw:
+        zmq_cr_socket = context.socket(zmq.PUB)
+        zmq_cr_socket.bind("ipc:///tmp/color_raw_frame_queue")
+        zmq_dr_socket = context.socket(zmq.PUB)
+        zmq_dr_socket.bind("ipc:///tmp/depth_raw_frame_queue")
 
     # Configure depth and color streams
     rs_pipeline = rs.pipeline()
@@ -25,15 +30,6 @@ def main(args=None):
     # Get the list of all connected devices
     ctx = rs.context()
     devices = ctx.query_devices()
-
-    # Create args dictionary with default values
-    class Args:
-        width = 1280
-        height = 720
-        rate = 30
-        bitrate = 2000
-
-    args = Args()
 
     # Print settings for each device
     for device in devices:
@@ -175,8 +171,8 @@ def main(args=None):
             frames = rs_pipeline.wait_for_frames()
             aligned_frames = align.process(frames)
 
-            color_frame = frames.get_color_frame()
-            depth_frame = frames.get_depth_frame()
+            color_frame = aligned_frames.get_color_frame()
+            depth_frame = aligned_frames.get_depth_frame()
             if not depth_frame or not color_frame:
                 continue
 
@@ -188,6 +184,11 @@ def main(args=None):
             # Convert frame to numpy array
             color_image = np.asanyarray(color_frame.get_data())
             depth_image = np.asanyarray(depth_frame.get_data())
+
+            if (args is not None) and args.raw:
+                # Publish raw frames to zmq sockets
+                zmq_cr_socket.send(color_image.tobytes())
+                zmq_dr_socket.send(depth_image.tobytes())
 
             # Push the frame into the GStreamer pipeline
             buffer = Gst.Buffer.new_wrapped(color_image.tobytes())
@@ -239,4 +240,12 @@ def main(args=None):
     gst_d_pipeline.set_state(Gst.State.NULL)
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description="RealSense Streamer")
+    parser.add_argument('--raw', action='store_true', help='Send frames in raw as well')
+    parser.add_argument('--width', type=int, default=1280, help='Frame width')
+    parser.add_argument('--height', type=int, default=720, help='Frame height')
+    parser.add_argument('--rate', type=int, default=30, help='Frame rate (fps)')
+    parser.add_argument('--bitrate', type=int, default=2000, help='Bitrate for video encoding (kbps)')
+    args = parser.parse_args()
+
+    main(args)
