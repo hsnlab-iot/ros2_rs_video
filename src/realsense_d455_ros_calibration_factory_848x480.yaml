@@ -1,0 +1,23 @@
+camera_name: realsense_d455
+image_width: 848
+image_height: 480
+
+distortion_model: plumb_bob
+
+distortion_coefficients:
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [424.32232666015625, 0.0, 425.6869812011719, 0.0, 424.32232666015625, 238.30226135253906, 0.0, 0.0, 1.0]
+
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [424.32232666015625, 0.0, 425.6869812011719, 0.0, 0.0, 424.32232666015625, 238.30226135253906, 0.0, 0.0, 0.0, 1.0, 0.0]
