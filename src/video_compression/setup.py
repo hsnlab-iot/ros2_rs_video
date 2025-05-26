@@ -6,7 +6,7 @@ package_name = 'video_compression'
 
 setup(
     name=package_name,
-    version='0.0.1',
+    version='0.0.2',
     # Packages to export
     #packages=find_packages(exclude=['test']),
     packages=[package_name],
@@ -41,6 +41,7 @@ setup(
         'console_scripts': [
             'compress = video_compression.compress_node:main',
             'decompress = video_compression.decompress_node:main',
+            'raw = video_compression.raw_node:main',
         ],
     },
 )
