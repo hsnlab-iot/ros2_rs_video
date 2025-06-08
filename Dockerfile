@@ -6,6 +6,14 @@ COPY src /opt/ws/src
 # As a temporal solution, delete the venv. Later it should be placed outside ros2 ws
 RUN rm -rf /opt/ws/venv
 
+RUN apt-get update && \
+    apt-get install -y \
+        libgstreamer1.0-dev \
+        libgstreamer-plugins-base1.0-dev \
+        libzmq3-dev \
+        python3-pkgconfig \
+        pkg-config
+
 # Build the workspace
 RUN . /opt/ros/$ROS_DISTRO/setup.sh && \
     cd /opt/ws && \

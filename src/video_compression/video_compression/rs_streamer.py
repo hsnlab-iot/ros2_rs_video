@@ -7,6 +7,7 @@ import numpy as np
 import zmq
 import time
 import argparse
+from colorizer import depth16_to_12bit_piecewise, depth16_to_12bit_piecewise_numba, encode_12bit_to_rgb_4bit_channels, encode_12bit_to_rgb_4bit_channels_numba
 
 Gst.init(None)
 
@@ -143,7 +144,7 @@ def main(args=None):
     threshold_filter = rs.threshold_filter()
     temporal_filter = rs.temporal_filter()
     spatial_filter = rs.spatial_filter()
-    color_filter = rs.colorizer()
+    #color_filter = rs.colorizer()
 
     MIN_DEPTH = 0.3
     MAX_DEPTH = 10.0
@@ -159,10 +160,10 @@ def main(args=None):
     temporal_filter.set_option(rs.option.filter_smooth_alpha, 0.4)
     temporal_filter.set_option(rs.option.holes_fill, 3) # it is called this way
 
-    color_filter.set_option(rs.option.histogram_equalization_enabled, 0)
-    color_filter.set_option(rs.option.color_scheme, 9)		# Hue colorization
-    color_filter.set_option(rs.option.min_distance, MIN_DEPTH)
-    color_filter.set_option(rs.option.max_distance, MAX_DEPTH)
+    #color_filter.set_option(rs.option.histogram_equalization_enabled, 0)
+    #color_filter.set_option(rs.option.color_scheme, 9)		# Hue colorization
+    #color_filter.set_option(rs.option.min_distance, MIN_DEPTH)
+    #color_filter.set_option(rs.option.max_distance, MAX_DEPTH)
 
     # Start a new thread to fill the pipeline
     def fill_pipeline():
@@ -179,11 +180,14 @@ def main(args=None):
             depth_frame = threshold_filter.process(depth_frame)
             depth_frame = spatial_filter.process(depth_frame)
             depth_frame = temporal_filter.process(depth_frame)
-            depth_frame = color_filter.process(depth_frame)
+            #depth_frame = color_filter.process(depth_frame)
 
             # Convert frame to numpy array
             color_image = np.asanyarray(color_frame.get_data())
             depth_image = np.asanyarray(depth_frame.get_data())
+
+            # Colorize
+            depth_image = colorizer.encode(depth_image)
 
             if (args is not None) and args.raw:
                 # Publish raw frames to zmq sockets

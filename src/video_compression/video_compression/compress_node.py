@@ -1,84 +1,122 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
-import threading
 import zmq
-from rcl_interfaces.msg import ParameterDescriptor, ParameterType
-from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+import threading
 
+import gi
+gi.require_version('Gst', '1.0')
+from gi.repository import Gst
 
-class ZMQH264Publisher(Node):
+class ZMQGStreamerPublisher(Node):
     def __init__(self):
-        super().__init__('h264_publisher_node')
+        print("D3")
+        Gst.init(None)  # Initialize GStreamer
+        print("D3.1")
+        super().__init__('zmq_h264_gstreamer_publisher')
+        print("D4")
+        rclpy.logging.set_logger_level(self.get_logger().name, rclpy.logging.LoggingSeverity.INFO)
+        print("DEUG")
+        self.get_logger().info("Initializing ZMQ GStreamer Publisher Node")
 
-        video_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=3
+        # Declare parameters
+        self.declare_parameter('zmq_url', 'ipc:///tmp/image')
+        self.declare_parameter('mode', 'color')
+
+        self.declare_parameter('width', 1280)
+        self.declare_parameter('height', 720)
+        self.declare_parameter('rate', 30)
+        self.declare_parameter('bitrate', 2000)  # Default bitrate in kbps
+
+        self.zmq_url = self.get_parameter('zmq_url').get_parameter_value().string_value
+        self.mode = self.get_parameter('mode').get_parameter_value().string_value
+        self.width = self.get_parameter('width').get_parameter_value().integer_value
+        self.height = self.get_parameter('height').get_parameter_value().integer_value
+        self.rate = self.get_parameter('rate').get_parameter_value().integer_value
+        self.bitrate = self.get_parameter('bitrate').get_parameter_value().integer_value
+
+        if self.mode not in ['color', 'depth']:
+            self.get_logger().error("Invalid mode specified. Use 'color' or 'depth'.")
+            raise ValueError("Invalid mode specified.")
+        
+        self.gst_pipeline = (
+            'appsrc name=src ! '
+            'videoconvert ! '
+            f'video/x-raw,format=I420,width={self.width},height={self.height},framerate={self.rate}/1 ! '
+            f'x264enc tune=zerolatency bitrate={self.bitrate} speed-preset=ultrafast b-adapt=false key-int-max=3 sliced-threads=true byte-stream=true ! '
+            'video/x-h264,profile=main,stream-format=byte-stream,alignement=nal ! '
+            'appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true'
         )
 
-        self.publisher_ = self.create_publisher(CompressedImage, 'video/h264', video_qos)
-        self.get_logger().info("Starting H.264 Publisher node")
-        
-        self.declare_parameter('zmq_endpoint', 'ipc:///tmp/frame_queue', 
-            ParameterDescriptor(type_=ParameterType.PARAMETER_STRING, description='ZMQ endpoint, the source of the frames'))  
-        zmq_endpoint = self.get_parameter('zmq_endpoint').get_parameter_value().string_value
+        self.get_logger().info("Starting ZMQ GStreamer Publisher")
 
-        self.declare_parameter('frame_id', 'camera',
-            ParameterDescriptor(type_=ParameterType.PARAMETER_STRING, description='Frame ID for the published images'))
-        frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
-        
-        # Set up ZeroMQ context and subscriber socket
-        context = zmq.Context()
-        subscriber = context.socket(zmq.SUB)
-        subscriber.setsockopt(zmq.CONFLATE, 1)
-        subscriber.connect(zmq_endpoint)
-        subscriber.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribe to all messages
+        self.publisher = self.create_publisher(CompressedImage, "video/h264", 3)
+                
+        #self.mainloop = GLib.MainLoop()
+        self.pipeline = Gst.parse_launch(self.gst_pipeline)
+        self.appsrc = self.pipeline.get_by_name('appsrc')
+        self.appsink = self.pipeline.get_by_name('appsink')
 
-        def zmq_listener():
-            self.c = 0
-            while rclpy.ok():
-                try:
-                    # Receive message from ZMQ
-                    message = subscriber.recv(flags=zmq.NOBLOCK)
-                    if message:
-                        # Create and publish CompressedImage message
-                        compressed_image = CompressedImage()
-                        compressed_image.format = "h264"
-                        compressed_image.data = message
-                        compressed_image.header.stamp = self.get_clock().now().to_msg()
-                        compressed_image.header.frame_id = frame_id
-                        self.publisher_.publish(compressed_image)
+        if self.appsrc is None or self.appsink is None:
+            self.get_logger().error("GStreamer pipeline must contain named 'appsrc' and 'appsink' elements.")
+            raise RuntimeError("Invalid GStreamer pipeline.")
 
-                        self.c += 1
-                        if self.c % 100 == 0:
-                            self.get_logger().info(f"Published {self.c} messages")
-                except zmq.Again:
-                    pass  # No message received, continue loop
+        self.appsink.connect('new-sample', self.on_new_sample)
 
-        # Start ZMQ listener in a separate thread
-        self.zmq_thread = threading.Thread(target=zmq_listener, daemon=True)
+        # Start GStreamer pipeline
+        self.pipeline.set_state(Gst.State.PLAYING)
+
+        # Start ZMQ thread
+        self.zmq_thread = threading.Thread(target=self.zmq_listener, daemon=True)
         self.zmq_thread.start()
 
-    def destroy_node(self):
-        super().destroy_node()
+    def zmq_listener(self):
+        self.get_logger().warn(f"Listening for ZMQ messages on {self.zmq_url}")
+        context = zmq.Context()
+        socket = context.socket(zmq.SUB)
+        socket.connect(self.zmq_url)
+        socket.setsockopt_string(zmq.SUBSCRIBE, '')
+        self.get_logger().info(f"Listening for ZMQ messages on {self.zmq_url}")
 
+        while rclpy.ok():
+            try:
+                data = socket.recv()
+                # Feed data to GStreamer appsrc
+                buf = Gst.Buffer.new_allocate(None, len(data), None)
+                buf.fill(0, data)
+                self.appsrc.emit('push-buffer', buf)
+            except Exception as e:
+                self.get_logger().error(f"ZMQ error: {e}")
+
+    def on_new_sample(self, sink):
+        sample = sink.emit('pull-sample')
+        buf = sample.get_buffer()
+        success, mapinfo = buf.map(Gst.MapFlags.READ)
+        if not success:
+            return Gst.FlowReturn.ERROR
+
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.format = "h264"
+        msg.data = mapinfo.data
+
+        self.publisher.publish(msg)
+        buf.unmap(mapinfo)
+        return Gst.FlowReturn.OK
 
 def main(args=None):
-
-    # Initialize ROS2 node
-
+    print("Starting ZMQ GStreamer Publisher Node")
     rclpy.init(args=args)
-    node = ZMQH264Publisher()
-
+    print("D1")
+    node = ZMQGStreamerPublisher()
+    print("D2")
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    node.pipeline.set_state(Gst.State.NULL)
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

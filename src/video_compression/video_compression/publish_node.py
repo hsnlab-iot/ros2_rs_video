@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
-
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage
 import threading
 import zmq
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType
@@ -10,9 +8,9 @@ from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 
-class ZMQRawPublisher(Node):
+class ZMQH264Publisher(Node):
     def __init__(self):
-        super().__init__('raw_publisher_node')
+        super().__init__('h264_publisher_node')
 
         video_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -20,8 +18,8 @@ class ZMQRawPublisher(Node):
             depth=3
         )
 
-        self.publisher_ = self.create_publisher(Image, 'image_raw', video_qos)
-        self.get_logger().info("Starting raw Publisher node")
+        self.publisher_ = self.create_publisher(CompressedImage, 'video/h264', video_qos)
+        self.get_logger().info("Starting H.264 Publisher node")
         
         self.declare_parameter('zmq_endpoint', 'ipc:///tmp/frame_queue', 
             ParameterDescriptor(type_=ParameterType.PARAMETER_STRING, description='ZMQ endpoint, the source of the frames'))  
@@ -45,18 +43,13 @@ class ZMQRawPublisher(Node):
                     # Receive message from ZMQ
                     message = subscriber.recv(flags=zmq.NOBLOCK)
                     if message:
-                        # Create and publish Image message
-                        image = Image()
-                        image.data = message
-                        image.height = 720  # Set appropriate height
-                        image.width = 1280
-                        image.encoding = 'bgr8'  # Set appropriate encoding
-                        image.is_bigendian = False
-                        image.step = image.width * 3
-                        # Set header information
-                        image.header.stamp = self.get_clock().now().to_msg()
-                        image.header.frame_id = frame_id
-                        self.publisher_.publish(image)
+                        # Create and publish CompressedImage message
+                        compressed_image = CompressedImage()
+                        compressed_image.format = "h264"
+                        compressed_image.data = message
+                        compressed_image.header.stamp = self.get_clock().now().to_msg()
+                        compressed_image.header.frame_id = frame_id
+                        self.publisher_.publish(compressed_image)
 
                         self.c += 1
                         if self.c % 100 == 0:
@@ -77,7 +70,7 @@ def main(args=None):
     # Initialize ROS2 node
 
     rclpy.init(args=args)
-    node = ZMQRawPublisher()
+    node = ZMQH264Publisher()
 
     try:
         rclpy.spin(node)
