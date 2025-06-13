@@ -22,20 +22,42 @@ public:
         rate_ = declare_parameter<int>("rate", 30);
         frame_name_ = declare_parameter<std::string>("frame_name", "camera");
         camera_info_file_ = declare_parameter<std::string>("camera_info_file", "");
+        mode_ = declare_parameter<std::string>("mode", "color");
 
         // Initialize GStreamer
         gst_init(nullptr, nullptr);
 
+        if (mode_ != "color" && mode_ != "depth_rgb" && mode_ != "depth_yuv" && mode_ != "depth_yuv_12") {
+            RCLCPP_ERROR(this->get_logger(), "Invalid mode specified: %s", mode_.c_str());
+            throw std::runtime_error("Invalid mode specified.");
+        }
+
+        if (mode_ == "color" || mode_ == "depth_rgb") {
+            format_ = "RGB"; // RGB format for color and depth RGB
+        } else if (mode_ == "depth_yuv") {
+            format_ = "Y444"; // YUV format for depth
+        } else if (mode_ == "depth_yuv_12") {
+            format_ = "Y444_12LE"; // Grayscale format
+        }
+
         // Build GStreamer pipeline
+        /*
         std::string pipeline_desc =
             "appsrc name=src is-live=true format=time ! "
             //"video/x-h264, stream-format=byte-stream, alignment=nal, profile=main ! "
             "h264parse ! avdec_h264 ! videoconvert ! "
-            "video/x-raw, format=BGR ! "
+            "video/x-raw, format=RGB ! "
             "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
-
+        */
+        std::ostringstream pipeline_ss;
+        pipeline_ss
+            << "appsrc name=src is-live=true format=time ! "
+            "h265parse ! avdec_h265 ! videoconvert ! "
+            "video/x-raw, format=" << format_ << " ! "
+            "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
+        
         GError* error = nullptr;
-        pipeline_ = gst_parse_launch(pipeline_desc.c_str(), &error);
+        pipeline_ = gst_parse_launch(pipeline_ss.str().c_str(), &error);
         if (!pipeline_) {
             RCLCPP_ERROR(this->get_logger(), "Failed to create GStreamer pipeline: %s", error->message);
             g_error_free(error);
@@ -46,7 +68,11 @@ public:
         appsink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "sink");
 
         // Set caps on appsrc
+        /*
         std::string caps_str = "video/x-h264, stream-format=byte-stream, alignment=nal, profile=main, width=" +
+            std::to_string(width_) + ", height=" + std::to_string(height_) + ", framerate=" + std::to_string(rate_) + "/1";
+        */
+        std::string caps_str = "video/x-h265, stream-format=byte-stream, alignment=au, width=" +
             std::to_string(width_) + ", height=" + std::to_string(height_) + ", framerate=" + std::to_string(rate_) + "/1";
         GstCaps* caps = gst_caps_from_string(caps_str.c_str());
         g_object_set(G_OBJECT(appsrc_), "caps", caps, nullptr);
@@ -102,6 +128,7 @@ private:
     int width_, height_, rate_;
     std::string frame_name_;
     std::string camera_info_file_;
+    std::string mode_, format_;
 
     // ROS
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
@@ -196,7 +223,56 @@ private:
 
         try {
             cv::Mat frame(height, width, CV_8UC3, (void*)map.data);
-            auto ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", frame).toImageMsg();
+            sensor_msgs::msg::Image::SharedPtr ros_img;
+            if (mode_ == "color") {
+                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", frame).toImageMsg();
+            } else if (mode_ == "depth_rgb") {
+                // Convert RGB back to 16-bit depth
+                cv::Mat depth_frame(height, width, CV_16UC1);
+                #pragma omp parallel for
+                for (int v = 0; v < height; ++v) {
+                    for (int u = 0; u < width; ++u) {
+                        const cv::Vec3b& rgb = frame.at<cv::Vec3b>(v, u);
+                        uint8_t r4 = rgb[0] >> 4;
+                        uint8_t g4 = rgb[1] >> 4;
+                        uint8_t b4 = rgb[2] >> 4;
+                        uint16_t depth_value = (r4 << 8) | (g4 << 4) | b4;
+                        depth_frame.at<uint16_t>(v, u) = depth_value;
+                    }
+                }
+                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
+            } else if (mode_ == "depth_yuv") {
+                // Convert YUV back to 16-bit depth
+                cv::Mat depth_frame(height, width, CV_16UC1);
+                uint8_t* y = map.data;
+                uint8_t* u = y + width * height;
+                uint8_t* v = u + width * height;
+                #pragma omp parallel for
+                for (int py = 0; py < height; ++py) {
+                    for (int px = 0; px < width; ++px) {
+                        uint8_t yv = y[py * width + px];
+                        uint8_t uv = u[py * width + px]; // U
+                        uint8_t vv = v[py * width + px]; // V
+                        // Convert YUV to 16-bit depth value
+                        // Y: d11, d10, d9, d8, d5, d4, x/(d3), x/(d2)
+                        uint16_t d = (((uint16_t)yv) << 4) & 0xf00; // d11, d10, d9, d8
+                        d |= (yv << 2) & 0x30; // d5, d4
+                        // U: d7, d3, d1, x, x, x, x, x
+                        d |= (uv & 0x80) | ((uv >> 3) & 0x08) | ((uv >> 4) & 0x02); // d7, d3, d1
+                        // V: d6, d2, d0, x, x, x, x, x
+                        d |= (vv >> 1 & 0x40) | ((vv >> 4) & 0x04) | ((vv >> 5) & 0x01); // d6, d2, d0                        
+                        depth_frame.at<uint16_t>(py, px) = d;
+                    }
+                }
+                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
+            } else if (mode_ == "depth_yuv_12") {
+                cv::Mat gray_frame(height, width, CV_16UC1, (void*)map.data);
+                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", gray_frame).toImageMsg();
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "Unsupported mode: %s", mode_.c_str());
+                throw std::runtime_error("Unsupported mode in on_new_sample");
+            }
+
             ros_img->header.stamp = this->now();
             ros_img->header.frame_id = frame_name_;
             image_pub_->publish(*ros_img);
