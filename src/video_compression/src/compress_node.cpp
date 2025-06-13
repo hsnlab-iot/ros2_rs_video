@@ -117,6 +117,8 @@ private:
         void* context = zmq_ctx_new();
         void* socket = zmq_socket(context, ZMQ_SUB);
         zmq_connect(socket, zmq_url_.c_str());
+        int conflate = 1;
+        zmq_setsockopt(socket, ZMQ_CONFLATE, &conflate, sizeof(conflate));
         zmq_setsockopt(socket, ZMQ_SUBSCRIBE, "", 0);
 
         uint8_t* depth_rgb = nullptr;

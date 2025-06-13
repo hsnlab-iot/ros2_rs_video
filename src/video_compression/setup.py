@@ -39,8 +39,7 @@ setup(
     # scripts here.
     entry_points={
         'console_scripts': [
-            'decompress = video_compression.decompress_node:main',
-            'raw = video_compression.raw_node:main',
+            'xxx = video_compression.xxx_node:main',
         ],
     },
 )

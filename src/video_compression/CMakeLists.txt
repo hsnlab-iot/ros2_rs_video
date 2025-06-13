@@ -26,9 +26,11 @@ include_directories(
 # Create the executable
 add_executable(compress src/compress_node.cpp)
 add_executable(decompress src/decompress_node.cpp)
+add_executable(raw src/raw_node.cpp)
 
 ament_target_dependencies(compress rclcpp sensor_msgs)
 ament_target_dependencies(decompress rclcpp sensor_msgs cv_bridge)
+ament_target_dependencies(raw rclcpp sensor_msgs)
 
 target_link_libraries(compress
   ${ZMQ_LIBRARIES}
@@ -41,11 +43,17 @@ target_link_libraries(decompress
   ${OpenCV_LIBRARIES}
   yaml-cpp
 )
+target_link_libraries(raw
+  ${ZMQ_LIBRARIES}
+  ${ament_LIBRARIES}
+  yaml-cpp
+)
 
 # Install the executable
 install(TARGETS
   compress
   decompress
+  raw
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -53,8 +61,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install Python executables
 install(PROGRAMS
-  video_compression/decompress_node.py
-  video_compression/raw_node.py
+  video_compression/logplayer.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
