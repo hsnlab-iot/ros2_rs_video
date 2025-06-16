@@ -1,29 +1,18 @@
-import gi
-gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
 import pyrealsense2 as rs
 import threading
 import numpy as np
 import zmq
 import time
 import argparse
-from colorizer import depth16_to_12bit_piecewise, depth16_to_12bit_piecewise_numba, encode_12bit_to_rgb_4bit_channels, encode_12bit_to_rgb_4bit_channels_numba
-
-Gst.init(None)
 
 def main(args=None):
 
     # Create a zmq context and in-memory queue
     context = zmq.Context()
     zmq_c_socket = context.socket(zmq.PUB)
-    zmq_c_socket.bind("ipc:///tmp/color_frame_queue")
+    zmq_c_socket.bind("ipc:///tmp/color_image")
     zmq_d_socket = context.socket(zmq.PUB)
-    zmq_d_socket.bind("ipc:///tmp/depth_frame_queue")
-    if (args is not None) and args.raw:
-        zmq_cr_socket = context.socket(zmq.PUB)
-        zmq_cr_socket.bind("ipc:///tmp/color_raw_frame_queue")
-        zmq_dr_socket = context.socket(zmq.PUB)
-        zmq_dr_socket.bind("ipc:///tmp/depth_raw_frame_queue")
+    zmq_d_socket.bind("ipc:///tmp/depth_image")
 
     # Configure depth and color streams
     rs_pipeline = rs.pipeline()
@@ -51,92 +40,7 @@ def main(args=None):
     depth_scale = depth_sensor.get_depth_scale()
     print("Depth Scale is: " , depth_scale)
 
-    def on_color_sample(sink):
-        nonlocal sc, cc, zmq_c_socket
-        sample = sink.emit('pull-sample')
-        if sample is None:
-            return Gst.FlowReturn.ERROR
-
-        buffer = sample.get_buffer()
-        success, map_info = buffer.map(Gst.MapFlags.READ)
-        if not success:
-            return Gst.FlowReturn.ERROR
-
-        # Publish the frame data to the in-memory queue
-        zmq_c_socket.send(map_info.data)
-        sc = sc + buffer.get_size()
-        buffer.unmap(map_info)
-
-        cc = cc + 1
-        return Gst.FlowReturn.OK
-
-    def on_depth_sample(sink):
-        nonlocal sd, cd, zmq_d_socket
-        sample = sink.emit('pull-sample')
-        if sample is None:
-            return Gst.FlowReturn.ERROR
-
-        buffer = sample.get_buffer()
-        success, map_info = buffer.map(Gst.MapFlags.READ)
-        if not success:
-            return Gst.FlowReturn.ERROR
-
-        # Publish the frame data to the in-memory queue
-        zmq_d_socket.send(map_info.data)
-        sd = sd + buffer.get_size()
-        buffer.unmap(map_info)
-
-        cd = cd + 1
-        return Gst.FlowReturn.OK
-
-    # GStreamer pipeline
-    gst_pipeline_c_description = (
-        'appsrc name=color ! '
-        'videoconvert ! '
-        f'video/x-raw,format=I420,width={args.width},height={args.height},framerate={args.rate}/1 ! '
-        f'x264enc tune=zerolatency bitrate={args.bitrate} speed-preset=ultrafast b-adapt=false key-int-max=3 sliced-threads=true byte-stream=true ! '
-        'video/x-h264,profile=main,stream-format=byte-stream,alignement=nal ! '
-        'appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true'
-    )
-
-    gst_pipeline_d_description = (
-        'appsrc name=depth ! '
-        'videoconvert ! '
-        f'video/x-raw,format=I420,width={args.width},height={args.height},framerate={args.rate}/1 ! '
-        f'x264enc tune=zerolatency bitrate={args.bitrate} speed-preset=ultrafast b-adapt=false key-int-max=3 sliced-threads=true byte-stream=true ! '
-        'video/x-h264,profile=main,stream-format=byte-stream,alignement=nal ! '
-        'appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true'
-    )
-
-    gst_c_pipeline = Gst.parse_launch(gst_pipeline_c_description)
-    gst_d_pipeline = Gst.parse_launch(gst_pipeline_d_description)
-
-    cc = 0
-    sc = 0
-    cd = 0
-    sd = 0
-
-    appsink_c = gst_c_pipeline.get_by_name('sink')
-    appsink_c.connect('new-sample', on_color_sample)
-    
-    appsrc_c = gst_c_pipeline.get_by_name('color')
-    appsrc_c.set_property('is-live', True)
-    appsrc_c.set_property('block', True)
-    appsrc_c.set_property('format', Gst.Format.TIME)
-    appsrc_c.set_property('caps', Gst.Caps.from_string(f'video/x-raw,format=RGB,width={args.width},height={args.height},framerate={args.rate}/1'))
-
-    appsink_d = gst_d_pipeline.get_by_name('sink')
-    appsink_d.connect('new-sample', on_depth_sample)
-
-    appsrc_d = gst_d_pipeline.get_by_name('depth')
-    appsrc_d.set_property('is-live', True)
-    appsrc_d.set_property('block', True)
-    appsrc_d.set_property('format', Gst.Format.TIME)
-    appsrc_d.set_property('caps', Gst.Caps.from_string(f'video/x-raw,format=RGB,width={args.width},height={args.height},framerate={args.rate}/1'))
-
-    # Start pipeline
-    gst_c_pipeline.set_state(Gst.State.PLAYING)
-    gst_d_pipeline.set_state(Gst.State.PLAYING)
+    cc = cs = ds = 0
 
     # Setup depth
     align = rs.align(rs.stream.color)
@@ -177,6 +81,9 @@ def main(args=None):
             if not depth_frame or not color_frame:
                 continue
 
+            nonlocal cc
+            cc = cc + 1
+
             depth_frame = threshold_filter.process(depth_frame)
             depth_frame = spatial_filter.process(depth_frame)
             depth_frame = temporal_filter.process(depth_frame)
@@ -186,38 +93,22 @@ def main(args=None):
             color_image = np.asanyarray(color_frame.get_data())
             depth_image = np.asanyarray(depth_frame.get_data())
 
-            # Colorize
-            depth_image = colorizer.encode(depth_image)
-
-            if (args is not None) and args.raw:
-                # Publish raw frames to zmq sockets
-                zmq_cr_socket.send(color_image.tobytes())
-                zmq_dr_socket.send(depth_image.tobytes())
-
-            # Push the frame into the GStreamer pipeline
-            buffer = Gst.Buffer.new_wrapped(color_image.tobytes())
-            appsrc_c.emit('push-buffer', buffer)
-            buffer = Gst.Buffer.new_wrapped(depth_image.tobytes())
-            appsrc_d.emit('push-buffer', buffer)
+            zmq_c_socket.send(color_image.tobytes())
+            zmq_d_socket.send(depth_image.tobytes())
+            cs = len(color_image.tobytes())
+            ds = len(depth_image.tobytes())
 
     video_stop = False
     pipeline_thread = threading.Thread(target=fill_pipeline, daemon=True)
     pipeline_thread.start()
 
     def stat():
-        nonlocal cc, sc, cd, sd
-        occ = osc = ocd = osd = 0
+        occ = 0
         while not video_stop:
-            acc = (cc - occ) / 10
-            asc = (sc - osc) / (cc - occ) if (cc - occ) > 0 else 0
-            acd = (cd - ocd) / 10
-            asd = (sd - osd) / (cd - ocd) if (cd - ocd) > 0 else 0
-            print(f'Color: {acc} fps {round(asc)} bytes/frame, Depth: {acd} fps {round(asd)} bytes/frame')
+            print(f'Color/depth: {cc - occ} fps. Color: {round(cs)} bytes/frame, Depth: {round(ds)} bytes/frame')
             occ = cc
-            osc = sc
-            ocd = cd
-            osd = sd
 
+            # Interruptable sleep
             for i in range(20):
                 if video_stop:
                     break
@@ -228,10 +119,9 @@ def main(args=None):
     stat_thread.start()
 
     try:
-        loop = GLib.MainLoop()
-        loop.run()
+        input("Press Enter to stop streaming...\n")
     except KeyboardInterrupt:
-        loop.quit()
+        pass
 
     # Stop the filling thread
     video_stop = True
@@ -240,16 +130,12 @@ def main(args=None):
     if stat_thread.is_alive():
         stat_thread.join()
 
-    gst_c_pipeline.set_state(Gst.State.NULL)
-    gst_d_pipeline.set_state(Gst.State.NULL)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="RealSense Streamer")
-    parser.add_argument('--raw', action='store_true', help='Send frames in raw as well')
     parser.add_argument('--width', type=int, default=1280, help='Frame width')
     parser.add_argument('--height', type=int, default=720, help='Frame height')
     parser.add_argument('--rate', type=int, default=30, help='Frame rate (fps)')
-    parser.add_argument('--bitrate', type=int, default=2000, help='Bitrate for video encoding (kbps)')
     args = parser.parse_args()
 
     main(args)
