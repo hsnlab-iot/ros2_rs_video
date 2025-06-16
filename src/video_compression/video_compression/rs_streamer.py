@@ -81,7 +81,7 @@ def main(args=None):
             if not depth_frame or not color_frame:
                 continue
 
-            nonlocal cc
+            nonlocal cc, cs, ds
             cc = cc + 1
 
             depth_frame = threshold_filter.process(depth_frame)
@@ -103,16 +103,19 @@ def main(args=None):
     pipeline_thread.start()
 
     def stat():
-        occ = 0
+        occ = cc
+        now = time.time()
         while not video_stop:
-            print(f'Color/depth: {cc - occ} fps. Color: {round(cs)} bytes/frame, Depth: {round(ds)} bytes/frame')
-            occ = cc
-
             # Interruptable sleep
             for i in range(20):
                 if video_stop:
                     break
                 time.sleep(0.5)
+
+            fps = (cc - occ) / (time.time() - now)
+            fps = round(fps, 2)
+            print(f'Color/depth: {fps} fps. Color: {round(cs)} bytes/frame, Depth: {round(ds)} bytes/frame')
+
 
     # Start a new thread to print statistics
     stat_thread = threading.Thread(target=stat, daemon=True)
