@@ -6,7 +6,7 @@ package_name = 'video_compression'
 
 setup(
     name=package_name,
-    version='0.0.2',
+    version='0.0.3',
     # Packages to export
     #packages=find_packages(exclude=['test']),
     packages=[package_name],
