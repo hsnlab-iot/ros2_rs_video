@@ -71,6 +71,7 @@ def main():
         while True:
             pos = f.tell()
             frame = read_log_frame(f)
+            now = time.time()
             if frame[0] is None:
                 f.seek(10 + framef_size)  # back to start but skip first header
                 player_start_time = time.time()
@@ -91,10 +92,8 @@ def main():
             if not pok:
                 print(f"Unknown msg type {msg_type_chr}, skipping...")
 
-            if timestamp_ms > 1000 * (time.time() - player_start_time):
-                time.sleep(
-                    (timestamp_ms / 1000.0) - (time.time() - player_start_time)
-                )
+            if timestamp_ms / 1000.0 > (now - player_start_time):
+                time.sleep((timestamp_ms / 1000.0) - (now - player_start_time))
 
     except KeyboardInterrupt:
         f.close()
