@@ -61,7 +61,8 @@ public:
                 << "v4l2h264enc output-io-mode=4 maxperf-enable=true extra-controls=\"controls,video_bitrate=" << bitrate_ * 1000
                 << ",encode,frame_level_rate_control_enable=1,h264_i_frame_period=15\" ! "
                 << "video/x-h264,stream-format=byte-stream,alignment=nal ! ";
-
+        }
+        
         pipeline_ss
             << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
 
