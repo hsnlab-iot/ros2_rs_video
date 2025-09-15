@@ -47,7 +47,7 @@ public:
 
         std::ostringstream pipeline_ss;
         pipeline_ss
-            << "appsrc name=src is-live=true format=time ! "
+            << "appsrc name=src is-live=true format=time ! ";
 
         if (compression_ == "h264") {
             pipeline_ss << "h264parse ! avdec_h264 ! ";
