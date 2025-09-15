@@ -46,7 +46,7 @@ public:
         std::ostringstream pipeline_ss;
         pipeline_ss
             << "appsrc name=src ! videoconvert ! "
-            << "video/x-raw,format=" << format_ << ",width=" << width_ << ",height=" << height_ << ",framerate=" << rate_ << "/1 ! "
+            << "video/x-raw,format=" << format_ << ",width=" << width_ << ",height=" << height_ << ",framerate=" << rate_ << "/1 ! ";
 
         if (compression_ == "h265") {
             pipeline_ss
