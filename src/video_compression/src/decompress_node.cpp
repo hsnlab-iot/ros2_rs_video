@@ -132,7 +132,7 @@ private:
     int width_, height_, rate_;
     std::string frame_name_;
     std::string camera_info_file_;
-    std::string mode_, format_;
+    std::string mode_, format_, compression_;
 
     // ROS
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
