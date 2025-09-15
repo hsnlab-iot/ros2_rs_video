@@ -20,10 +20,15 @@ public:
         height_ = this->declare_parameter<int>("height", 720);
         rate_ = this->declare_parameter<int>("rate", 30);
         bitrate_ = this->declare_parameter<int>("bitrate", 2000);
+        compression_ = this->declare_parameter<std::string>("compression", "h265");
 
         if (mode_ != "color" && mode_ != "depth_rgb" && mode_ != "depth_yuv" && mode_ != "depth_yuv_12" && mode_ != "gray") {
             RCLCPP_ERROR(this->get_logger(), "Invalid mode specified: %s. Supported modes are: color, depth_rgb, depth_yuv, depth_yuv_12", mode_.c_str());
             throw std::runtime_error("Invalid mode specified.");
+        }
+        if (compression_ != "h264" && compression_ != "h265" && compression_ != "rpi_h264") {
+            RCLCPP_ERROR(this->get_logger(), "Invalid compression specified: %s. Supported compressions are: h264, rpi_h264, h265", compression_.c_str());
+            throw std::runtime_error("Invalid compression specified.");
         }
 
         if (mode_ == "color") {
@@ -38,23 +43,26 @@ public:
 
         gst_init(nullptr, nullptr);
 
-        /*
-        std::ostringstream pipeline_ss;
-        pipeline_ss
-            << "appsrc name=src ! "
-            << "videoconvert ! "
-            << "video/x-raw,format=Y444,width=" << width_ << ",height=" << height_ << ",framerate=" << rate_ << "/1 ! "
-            << "x264enc tune=zerolatency bitrate=" << bitrate_ << " speed-preset=ultrafast b-adapt=false key-int-max=3 sliced-threads=true byte-stream=true ! "
-            //<< "video/x-h264,profile=main,stream-format=byte-stream,alignment=nal ! "
-            << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
-        */
-
         std::ostringstream pipeline_ss;
         pipeline_ss
             << "appsrc name=src ! videoconvert ! "
             << "video/x-raw,format=" << format_ << ",width=" << width_ << ",height=" << height_ << ",framerate=" << rate_ << "/1 ! "
-            << "x265enc tune=zerolatency bitrate=" << bitrate_ << " speed-preset=ultrafast key-int-max=15 ! "
-            << "video/x-h265,stream-format=byte-stream,alignment=au ! "
+
+        if (compression_ == "h265") {
+            pipeline_ss
+                << "x265enc tune=zerolatency bitrate=" << bitrate_ << " speed-preset=ultrafast key-int-max=15 ! "
+                << "video/x-h265,stream-format=byte-stream,alignment=au ! ";
+        } else if (compression_ == "h264") {
+            pipeline_ss
+                << "x264enc tune=zerolatency bitrate=" << bitrate_ << " speed-preset=ultrafast b-adapt=false key-int-max=15 sliced-threads=true byte-stream=true ! "
+                << "video/x-h264,profile=main,stream-format=byte-stream,alignment=nal ! ";
+        } else if (compression_ == "rpi_h264") {
+            pipeline_ss
+                << "v4l2h264enc output-io-mode=4 maxperf-enable=true extra-controls=\"controls,video_bitrate=" << bitrate_ * 1000
+                << ",encode,frame_level_rate_control_enable=1,h264_i_frame_period=15\" ! "
+                << "video/x-h264,stream-format=byte-stream,alignment=nal ! ";
+
+        pipeline_ss
             << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
 
         pipeline_ = gst_parse_launch(pipeline_ss.str().c_str(), nullptr);
@@ -258,7 +266,7 @@ private:
                         nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 20) ||
                         nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 21);
         
-        /* DEBIG only
+        /* DEBUG only
         std::ostringstream nal_types_ss;
         for (size_t i = 0; i < nal_types.size(); ++i) {
             nal_types_ss << static_cast<int>(nal_types[i]);

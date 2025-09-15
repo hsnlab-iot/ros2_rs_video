@@ -23,6 +23,7 @@ public:
         frame_name_ = declare_parameter<std::string>("frame_name", "camera");
         camera_info_file_ = declare_parameter<std::string>("camera_info_file", "");
         mode_ = declare_parameter<std::string>("mode", "color");
+        compression_ = declare_parameter<std::string>("compression", "h265");
 
         // Initialize GStreamer
         gst_init(nullptr, nullptr);
@@ -30,6 +31,10 @@ public:
         if (mode_ != "color" && mode_ != "depth_rgb" && mode_ != "depth_yuv" && mode_ != "depth_yuv_12") {
             RCLCPP_ERROR(this->get_logger(), "Invalid mode specified: %s", mode_.c_str());
             throw std::runtime_error("Invalid mode specified.");
+        }
+        if (compression_ != "h264" && compression_ != "h265") {
+            RCLCPP_ERROR(this->get_logger(), "Invalid compression specified: %s. Supported compressions are: h264, h265", compression_.c_str());
+            throw std::runtime_error("Invalid compression specified.");
         }
 
         if (mode_ == "color" || mode_ == "depth_rgb") {
@@ -40,21 +45,20 @@ public:
             format_ = "Y444_12LE"; // Grayscale format
         }
 
-        // Build GStreamer pipeline
-        /*
-        std::string pipeline_desc =
-            "appsrc name=src is-live=true format=time ! "
-            //"video/x-h264, stream-format=byte-stream, alignment=nal, profile=main ! "
-            "h264parse ! avdec_h264 ! videoconvert ! "
-            "video/x-raw, format=RGB ! "
-            "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
-        */
         std::ostringstream pipeline_ss;
         pipeline_ss
             << "appsrc name=src is-live=true format=time ! "
-            "h265parse ! avdec_h265 ! videoconvert ! "
-            "video/x-raw, format=" << format_ << " ! "
-            "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
+
+        if (compression_ == "h264") {
+            pipeline_ss << "h264parse ! avdec_h264 ! ";
+        } else if (compression_ == "h265") {
+            pipeline_ss << "h265parse ! avdec_h265 ! ";
+        }
+
+        pipeline_ss
+            << "videoconvert ! "
+            << "video/x-raw, format=" << format_ << " ! "
+            << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
         
         GError* error = nullptr;
         pipeline_ = gst_parse_launch(pipeline_ss.str().c_str(), &error);
