@@ -62,7 +62,7 @@ public:
                 << ",encode,frame_level_rate_control_enable=1,h264_i_frame_period=15\" ! "
                 << "video/x-h264,stream-format=byte-stream,alignment=nal ! ";
         }
-        
+
         pipeline_ss
             << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
 
@@ -110,7 +110,7 @@ public:
     }
 
 private:
-    std::string zmq_url_, mode_, format_;
+    std::string zmq_url_, mode_, format_, compression_;
     int width_, height_, rate_, bitrate_;
     GstElement *pipeline_{nullptr}, *appsrc_{nullptr}, *appsink_{nullptr};
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr publisher_;
