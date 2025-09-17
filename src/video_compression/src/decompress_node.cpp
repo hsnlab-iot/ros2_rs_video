@@ -71,13 +71,17 @@ public:
         appsrc_ = gst_bin_get_by_name(GST_BIN(pipeline_), "src");
         appsink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "sink");
 
-        // Set caps on appsrc
-        /*
-        std::string caps_str = "video/x-h264, stream-format=byte-stream, alignment=nal, profile=main, width=" +
-            std::to_string(width_) + ", height=" + std::to_string(height_) + ", framerate=" + std::to_string(rate_) + "/1";
-        */
-        std::string caps_str = "video/x-h265, stream-format=byte-stream, alignment=au, width=" +
-            std::to_string(width_) + ", height=" + std::to_string(height_) + ", framerate=" + std::to_string(rate_) + "/1";
+	std::string caps_str = "";
+
+        if (compression_ == "h264") {
+             caps_str = "video/x-h264, stream-format=byte-stream, alignment=nal, profile=main";
+        } else if (compression_ == "h265") {
+             caps_str = "video/x-h265, stream-format=byte-stream, alignment=au";
+        }
+	
+        caps_str += ", width=" + std::to_string(width_) + ", height=" +
+	       	std::to_string(height_) + ", framerate=" + std::to_string(rate_) + "/1";
+
         GstCaps* caps = gst_caps_from_string(caps_str.c_str());
         g_object_set(G_OBJECT(appsrc_), "caps", caps, nullptr);
         gst_caps_unref(caps);

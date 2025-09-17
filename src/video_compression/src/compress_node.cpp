@@ -37,6 +37,8 @@ public:
             format_ = "I420";
         } else if (mode_ == "depth_yuv") {
             format_ = "Y444";
+        } else if (mode_ == "depth_yuv_8") {
+            format_ = "YUY2";
         } else if (mode_ == "depth_yuv_12") {
             format_ = "Y444_12LE";
         }
@@ -121,6 +123,32 @@ private:
     std::vector<std::vector<uint8_t>> parameter_sets;   // VPS, SPS, PPS parameter sets
     bool extracted_parameter_sets = false;
 
+    static const uint8_t Y_TABLE[8] = {0, 36, 73, 109, 146, 182, 219, 255};
+    static const uint8_t UV_TABLE[4][2] = {
+        {64, 192},  // (0,0)
+        {192, 64},  // (0,1)
+        {32, 224},  // (1,0)
+        {224, 32}   // (1,1)
+    };
+
+    void encode_8bit_to_yuv422(const uint8_t gray, uint8_t *yuv)
+    {
+        uint8_t y0_code = (gray >> 5) & 0x07;
+        uint8_t y1_code = (gray >> 2) & 0x07;
+        uint8_t ubit     = (gray >> 1) & 0x01;
+        uint8_t vbit     =  gray       & 0x01;
+
+        uint8_t Y0 = Y_TABLE[y0_code];
+        uint8_t Y1 = Y_TABLE[y1_code];
+        uint8_t U  = UV_TABLE[(ubit << 1) | vbit][0];
+        uint8_t V  = UV_TABLE[(ubit << 1) | vbit][1];
+
+        yuv[0] = Y0;
+        yuv[1] = U;
+        yuv[2] = Y1;
+        yuv[3] = V;
+    }
+
     void zmq_listener() {
         RCLCPP_INFO(this->get_logger(), "Listening for ZMQ messages on %s", zmq_url_.c_str());
         void* context = zmq_ctx_new();
@@ -132,6 +160,7 @@ private:
 
         uint8_t* depth_rgb = nullptr;
         uint8_t* depth_yuv = nullptr;
+        uint16_t* depth_yuv_8 = nullptr;
         uint16_t* depth_yuv_12 = nullptr;
         if (mode_ == "depth_rgb") {
             depth_rgb = new uint8_t[width_ * height_ * 3];
@@ -139,8 +168,11 @@ private:
         else if (mode_ == "depth_yuv") {
             depth_yuv = new uint8_t[width_ * height_ * 3];
         }
+        else if (mode_ == "depth_yuv_8") {
+            depth_yuv_8 = new uint8_t[width_ * height_ * 4];
+        }
         else if (mode_ == "depth_yuv_12") {
-            depth_yuv_12 = new uint16_t[width_ * height_ * 3] ;
+            depth_yuv_12 = new uint16_t[width_ * height_ * 3];
         }
 
         while (rclcpp::ok()) {
@@ -202,6 +234,23 @@ private:
                     data = static_cast<void*>(depth_yuv);
                     size = width_ * height_ * 3;
                 }
+                else if (mode_ == "depth_yuv_8") {
+                    if (size != width_ * height_ * 2) {
+                        RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
+                        continue;
+                    }
+                    // Convert depth data to YUV422
+                    uint8_t* ddata = static_cast<uint16_t*>(zmq_msg_data(&msg));
+                    #pragma omp parallel for
+                    for (int i = 0; i < width_ * height_; ++i) {
+                        uint16_t d = static_cast<uint16_t>ddata[i];
+                        if (d > 0xFF) d = 0x00; // 8 bit only
+                        uint8_t gray1 = d & 0xFF;
+                        encode_8bit_to_yuv422(gray, &depth_yuv_8[i * 4]);
+                    }
+                    data = static_cast<void*>(depth_yuv_8);
+                    size = width_ * height_ * 4;
+                }
                 else if (mode_ == "depth_yuv_12") {
                     if (size != width_ * height_ * 2) {
                         RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
@@ -209,8 +258,8 @@ private:
                     }
                     // Copy depth data to depth_yuv_12
                     std::memcpy(depth_yuv_12, data, width_ * height_ * 2);
-                    // Fill U and V planes with 0x800
-                    std::fill(depth_yuv_12 + width_ * height_, depth_yuv_12 + 3 * width_ * height_, 0x800);
+                    // Fill U and V planes with 0x0000
+                    std::fill(depth_yuv_12 + width_ * height_, depth_yuv_12 + 3 * width_ * height_, 0x0000);
                     data = static_cast<void*>(depth_yuv_12);
                     size = width_ * height_ * 3 * 2;
                 }
@@ -231,6 +280,9 @@ private:
         }
         if (depth_yuv) {
             delete[] depth_yuv;
+        }
+        if (depth_yuv_8) {
+            delete[] depth_yuv_8;
         }
         if (depth_yuv_12) {
             delete[] depth_yuv_12;
