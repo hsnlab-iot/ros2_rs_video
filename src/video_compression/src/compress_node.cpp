@@ -60,14 +60,15 @@ public:
                 << "video/x-h264,profile=main,stream-format=byte-stream,alignment=nal ! ";
         } else if (compression_ == "rpi_h264") {
             pipeline_ss
-                << "v4l2h264enc output-io-mode=4 maxperf-enable=true extra-controls=\"controls,video_bitrate=" << bitrate_ * 1000
-                << ",encode,frame_level_rate_control_enable=1,h264_i_frame_period=15\" ! "
-                << "video/x-h264,stream-format=byte-stream,alignment=nal ! ";
+                << "v4l2h264enc output-io-mode=4 extra-controls=\"controls,video_bitrate=" << bitrate_ * 1000
+                << ",video_bitrate_mode=1,h264_i_frame_period=15,repeat_sequence_header=1\" ! "
+                << "h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=nal ! ";
         }
 
         pipeline_ss
             << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
 
+        RCLCPP_INFO(this->get_logger(), "GStreamer pipeline: %s", pipeline_ss.str().c_str());
         pipeline_ = gst_parse_launch(pipeline_ss.str().c_str(), nullptr);
         appsrc_ = gst_bin_get_by_name(GST_BIN(pipeline_), "src");
         appsink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "sink");
@@ -303,22 +304,31 @@ private:
             return GST_FLOW_ERROR;
         }
 
-         // Extract VPS/SPS/PPS once
-        if (!extracted_parameter_sets) {
-            extract_vps_sps_pps(map.data, map.size, parameter_sets);
-            if (!parameter_sets.empty()) {
-                extracted_parameter_sets = true;
+        if (compression_ == "h265" && !extracted_parameter_sets) {
+            RCLCPP_INFO(this->get_logger(), "Extracting VPS/SPS/PPS from H.265 stream");
+            // Extract VPS/SPS/PPS once
+            if (!extracted_parameter_sets) {
+                extract_vps_sps_pps(map.data, map.size, parameter_sets);
+                if (!parameter_sets.empty()) {
+                    extracted_parameter_sets = true;
+                }
             }
         }
 
-        auto nal_types = list_nal_unit_types_in_prefix(map.data, map.size);
-        bool has_vps_sps_pps = nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 32) ||
-                               nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 33) ||
-                               nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 34);
-        bool keyframe = nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 19) ||
-                        nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 20) ||
-                        nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 21);
-        
+        std::vector<uint8_t> nal_types;
+        auto has_vps_sps_pps = false;
+        auto keyframe = false;
+
+        if (compression_ == "h265") {
+            nal_types = list_nal_unit_types_in_prefix(map.data, map.size);
+            has_vps_sps_pps = nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 32) ||
+                            nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 33) ||
+                            nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 34);
+            keyframe = nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 19) ||
+                            nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 20) ||
+                            nal_types.end() != std::find(nal_types.begin(), nal_types.end(), 21);
+        }
+                            
         /* DEBUG only
         std::ostringstream nal_types_ss;
         for (size_t i = 0; i < nal_types.size(); ++i) {
@@ -333,10 +343,10 @@ private:
 
         auto msg = sensor_msgs::msg::CompressedImage();
         msg.header.stamp = this->now();
-        msg.format = "h265";
+        msg.format = compression_ == "h265" ? "hevc" : "h264";
     
         std::vector<uint8_t> new_data;
-        if (keyframe && extracted_parameter_sets && !has_vps_sps_pps) {
+        if (compression_ == "h265" && keyframe && extracted_parameter_sets && !has_vps_sps_pps) {
             for (const auto& nal : parameter_sets) {
                 new_data.insert(new_data.end(), nal.begin(), nal.end());
             }
