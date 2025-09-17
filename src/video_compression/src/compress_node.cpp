@@ -123,8 +123,8 @@ private:
     std::vector<std::vector<uint8_t>> parameter_sets;   // VPS, SPS, PPS parameter sets
     bool extracted_parameter_sets = false;
 
-    static const uint8_t Y_TABLE[8] = {0, 36, 73, 109, 146, 182, 219, 255};
-    static const uint8_t UV_TABLE[4][2] = {
+    static constexpr uint8_t Y_TABLE[8] = {0, 36, 73, 109, 146, 182, 219, 255};
+    static constexpr uint8_t UV_TABLE[4][2] = {
         {64, 192},  // (0,0)
         {192, 64},  // (0,1)
         {32, 224},  // (1,0)
@@ -160,7 +160,7 @@ private:
 
         uint8_t* depth_rgb = nullptr;
         uint8_t* depth_yuv = nullptr;
-        uint16_t* depth_yuv_8 = nullptr;
+        uint8_t* depth_yuv_8 = nullptr;
         uint16_t* depth_yuv_12 = nullptr;
         if (mode_ == "depth_rgb") {
             depth_rgb = new uint8_t[width_ * height_ * 3];
@@ -240,12 +240,12 @@ private:
                         continue;
                     }
                     // Convert depth data to YUV422
-                    uint8_t* ddata = static_cast<uint16_t*>(zmq_msg_data(&msg));
+                    uint16_t* ddata = static_cast<uint16_t*>(zmq_msg_data(&msg));
                     #pragma omp parallel for
                     for (int i = 0; i < width_ * height_; ++i) {
-                        uint16_t d = static_cast<uint16_t>ddata[i];
+                        uint16_t d = ddata[i];
                         if (d > 0xFF) d = 0x00; // 8 bit only
-                        uint8_t gray1 = d & 0xFF;
+                        uint8_t gray = d & 0xFF;
                         encode_8bit_to_yuv422(gray, &depth_yuv_8[i * 4]);
                     }
                     data = static_cast<void*>(depth_yuv_8);
