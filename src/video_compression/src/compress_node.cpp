@@ -6,6 +6,7 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <cstring>
+#include "depth_encoding.h"
 
 class ZMQGStreamerPublisher : public rclcpp::Node {
 public:
@@ -193,18 +194,8 @@ private:
                         RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
                         continue;
                     }
-                    // Convert depth data to RGB
                     uint8_t* ddata = static_cast<uint8_t*>(zmq_msg_data(&msg));
-                    #pragma omp parallel for
-                    for (int i = 0; i < width_ * height_; ++i) {
-                        uint16_t depth_value = static_cast<uint16_t>(ddata[i * 2] | (ddata[i * 2 + 1] << 8));
-                        uint8_t r4 = (depth_value >> 8) & 0xF;
-                        uint8_t g4 = (depth_value >> 4) & 0xF;
-                        uint8_t b4 = depth_value & 0xF;
-                        depth_rgb[i * 3]     = r4 << 4;
-                        depth_rgb[i * 3 + 1] = g4 << 4;
-                        depth_rgb[i * 3 + 2] = b4 << 4;
-                    }
+                    depth_encoding::depth_to_rgb(ddata, depth_rgb, width_, height_);
                     data = static_cast<void*>(depth_rgb);
                     size = width_ * height_ * 3;
                 }
@@ -213,25 +204,8 @@ private:
                         RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
                         continue;
                     }
-                    // Convert depth data to YUV
                     uint8_t* ddata = static_cast<uint8_t*>(zmq_msg_data(&msg));
-                    #pragma omp parallel for
-                    for (int i = 0; i < width_ * height_; ++i) {
-                        uint16_t d = static_cast<uint16_t>(ddata[i * 2] | (ddata[i * 2 + 1] << 8));
-                        // Y: d11, d10, d9, d8, d5, d4, x/(d3), x/(d2)
-                        uint8_t y = ((d >> 4) & 0xf0) | ((d >> 2) & 0x0f);
-                        // U: d7, d3, d1, x, x, x, x, x
-                        uint8_t u = ((d >> 5) & 0x4) |
-                                    ((d >> 2) & 0x2) |
-                                    ((d >> 1) & 0x1);
-                        // V: d6, d2, d0, x, x, x, x, x
-                        uint8_t v = ((d >> 4) & 0x4) |
-                                    ((d >> 1) & 0x2) |
-                                    ((d) & 0x1);
-                        depth_yuv[i] = y;
-                        depth_yuv[i + width_ * height_] = u << 5;
-                        depth_yuv[i + 2 * (width_ * height_)] = v << 5;
-                    }
+                    depth_encoding::depth_to_yuv(ddata, depth_yuv, width_, height_);
                     data = static_cast<void*>(depth_yuv);
                     size = width_ * height_ * 3;
                 }
@@ -240,15 +214,8 @@ private:
                         RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
                         continue;
                     }
-                    // Convert depth data to YUV422
                     uint16_t* ddata = static_cast<uint16_t*>(zmq_msg_data(&msg));
-                    #pragma omp parallel for
-                    for (int i = 0; i < width_ * height_; ++i) {
-                        uint16_t d = ddata[i];
-                        if (d > 0xFF) d = 0x00; // 8 bit only
-                        uint8_t gray = d & 0xFF;
-                        encode_8bit_to_yuv422(gray, &depth_yuv_8[i * 4]);
-                    }
+                    depth_encoding::depth_to_yuv_8(ddata, depth_yuv_8, width_, height_);
                     data = static_cast<void*>(depth_yuv_8);
                     size = width_ * height_ * 4;
                 }
@@ -257,10 +224,7 @@ private:
                         RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
                         continue;
                     }
-                    // Copy depth data to depth_yuv_12
-                    std::memcpy(depth_yuv_12, data, width_ * height_ * 2);
-                    // Fill U and V planes with 0x0000
-                    std::fill(depth_yuv_12 + width_ * height_, depth_yuv_12 + 3 * width_ * height_, 0x0000);
+                    depth_encoding::depth_to_yuv_12(data, depth_yuv_12, width_, height_);
                     data = static_cast<void*>(depth_yuv_12);
                     size = width_ * height_ * 3 * 2;
                 }

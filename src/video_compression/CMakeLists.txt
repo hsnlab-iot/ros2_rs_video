@@ -27,6 +27,7 @@ include_directories(
 add_executable(compress src/compress_node.cpp)
 add_executable(decompress src/decompress_node.cpp)
 add_executable(raw src/raw_node.cpp)
+add_library(depth_encoding src/depth_encoding.cpp)
 
 ament_target_dependencies(compress rclcpp sensor_msgs)
 ament_target_dependencies(decompress rclcpp sensor_msgs cv_bridge)
@@ -36,11 +37,13 @@ target_link_libraries(compress
   ${ZMQ_LIBRARIES}
   ${GSTREAMER_LIBRARIES}
   ${GSTREAMER_APP_LIBRARIES}
+  depth_encoding
 )
 target_link_libraries(decompress
   ${GSTREAMER_LIBRARIES}
   ${GSTREAMER_APP_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  depth_encoding
   yaml-cpp
 )
 target_link_libraries(raw

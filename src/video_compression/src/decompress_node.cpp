@@ -11,6 +11,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include "depth_encoding.h"
 
 class GStreamerDecoder : public rclcpp::Node {
 public:
@@ -237,45 +238,16 @@ private:
             } else if (mode_ == "depth_rgb") {
                 // Convert RGB back to 16-bit depth
                 cv::Mat depth_frame(height, width, CV_16UC1);
-                #pragma omp parallel for
-                for (int v = 0; v < height; ++v) {
-                    for (int u = 0; u < width; ++u) {
-                        const cv::Vec3b& rgb = frame.at<cv::Vec3b>(v, u);
-                        uint8_t r4 = rgb[0] >> 4;
-                        uint8_t g4 = rgb[1] >> 4;
-                        uint8_t b4 = rgb[2] >> 4;
-                        uint16_t depth_value = (r4 << 8) | (g4 << 4) | b4;
-                        depth_frame.at<uint16_t>(v, u) = depth_value;
-                    }
-                }
+                rgb_to_depth(frame, depth_frame);
                 ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
             } else if (mode_ == "depth_yuv") {
                 // Convert YUV back to 16-bit depth
                 cv::Mat depth_frame(height, width, CV_16UC1);
-                uint8_t* y = map.data;
-                uint8_t* u = y + width * height;
-                uint8_t* v = u + width * height;
-                #pragma omp parallel for
-                for (int py = 0; py < height; ++py) {
-                    for (int px = 0; px < width; ++px) {
-                        uint8_t yv = y[py * width + px];
-                        uint8_t uv = u[py * width + px]; // U
-                        uint8_t vv = v[py * width + px]; // V
-                        // Convert YUV to 16-bit depth value
-                        // Y: d11, d10, d9, d8, d5, d4, x/(d3), x/(d2)
-                        uint16_t d = (((uint16_t)yv) << 4) & 0xf00; // d11, d10, d9, d8
-                        d |= (yv << 2) & 0x30; // d5, d4
-                        // U: d7, d3, d1, x, x, x, x, x
-                        d |= (uv & 0x80) | ((uv >> 3) & 0x08) | ((uv >> 4) & 0x02); // d7, d3, d1
-                        // V: d6, d2, d0, x, x, x, x, x
-                        d |= (vv >> 1 & 0x40) | ((vv >> 4) & 0x04) | ((vv >> 5) & 0x01); // d6, d2, d0                        
-                        depth_frame.at<uint16_t>(py, px) = d;
-                    }
-                }
+                yuv_to_depth(frame, depth_frame);
                 ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
             } else if (mode_ == "depth_yuv_12") {
-                cv::Mat gray_frame(height, width, CV_16UC1, (void*)map.data);
-                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", gray_frame).toImageMsg();
+                cv::Mat depth_frame(height, width, CV_16UC1, (void*)map.data);
+                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
             } else {
                 RCLCPP_ERROR(this->get_logger(), "Unsupported mode: %s", mode_.c_str());
                 throw std::runtime_error("Unsupported mode in on_new_sample");
