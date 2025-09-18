@@ -35,15 +35,13 @@ def main(args=None):
     config.enable_stream(rs.stream.depth, args.width, args.height, rs.format.z16, args.rate)
 
     profile = rs_pipeline.start(config)
+    align = rs.align(rs.stream.color)
 
     depth_sensor = profile.get_device().first_depth_sensor()
     depth_scale = depth_sensor.get_depth_scale()
     print("Depth Scale is: " , depth_scale)
 
     cc = cd = cs = ds = 0
-
-    # Setup depth
-    align = rs.align(rs.stream.color)
 
     threshold_filter = rs.threshold_filter()
     temporal_filter = rs.temporal_filter()
@@ -72,11 +70,10 @@ def main(args=None):
     # Start a new thread to fill the pipeline
     def fill_pipeline():
         nonlocal cc, cd, cs, ds
+        latest_color_frame = None
         while not video_stop:
         # Get frames from the RealSense pipeline
-            frames = rs_pipeline.poll_for_frames()
-            if not frames:
-                continue  # nothing ready yet
+            frames = rs_pipeline.wait_for_frames()
 
             color_frame = frames.get_color_frame()
             depth_frame = frames.get_depth_frame()
@@ -89,8 +86,8 @@ def main(args=None):
 
             # Only align if we actually have a depth frame
             if depth_frame:
-                aligned_frames = align.process(frames)
-                depth_frame = aligned_frames.get_depth_frame()
+                #aligned_frames = align.process(frames)     # align takes too much time!
+                #depth_frame = aligned_frames.get_depth_frame()
                 depth_frame = threshold_filter.process(depth_frame)
                 depth_frame = spatial_filter.process(depth_frame)
                 depth_frame = temporal_filter.process(depth_frame)

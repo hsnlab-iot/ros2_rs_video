@@ -1,0 +1,17 @@
+Device Name: Intel RealSense D435I
+  Sensor Name: Stereo Module
+  Sensor Name: RGB Camera
+  Sensor Name: Motion Module
+Width: 1280, Height: 720, Rate: 30
+Depth Scale is:  0.0010000000474974513
+Depth Intrinsics: [ 1280x720  p[644.294 360.556]  f[654.588 654.588]  Brown Conrady [0 0 0 0 0] ]
+Color Intrinsics: [ 1280x720  p[650.718 355.175]  f[927.568 927.411]  Inverse Brown Conrady [0 0 0 0 0] ]
+
+Device Name: Intel RealSense D435I
+  Sensor Name: Stereo Module
+  Sensor Name: RGB Camera
+  Sensor Name: Motion Module
+Width: 640, Height: 480, Rate: 30
+Depth Scale is:  0.0010000000474974513
+Depth Intrinsics: [ 640x480  p[322.577 240.333]  f[392.753 392.753]  Brown Conrady [0 0 0 0 0] ]
+Color Intrinsics: [ 640x480  p[327.145 236.783]  f[618.379 618.274]  Inverse Brown Conrady [0 0 0 0 0] ]
