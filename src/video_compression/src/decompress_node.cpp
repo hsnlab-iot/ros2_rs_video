@@ -41,7 +41,7 @@ public:
         if (mode_ == "color" || mode_ == "depth_rgb") {
             format_ = "RGB"; // RGB format for color and depth RGB
         } else if (mode_ == "depth_yuv") {
-            format_ = "Y444"; // YUV format for depth
+            format_ = "YUY2"; // YUV format for depth
         } else if (mode_ == "depth_yuv_12") {
             format_ = "Y444_12LE"; // Grayscale format
         }
@@ -238,12 +238,12 @@ private:
             } else if (mode_ == "depth_rgb") {
                 // Convert RGB back to 16-bit depth
                 cv::Mat depth_frame(height, width, CV_16UC1);
-                rgb_to_depth(frame, depth_frame);
+                depth_encoding::rgb_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width, height);
                 ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
             } else if (mode_ == "depth_yuv") {
                 // Convert YUV back to 16-bit depth
                 cv::Mat depth_frame(height, width, CV_16UC1);
-                yuv_to_depth(frame, depth_frame);
+                depth_encoding::yuv_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width, height);
                 ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
             } else if (mode_ == "depth_yuv_12") {
                 cv::Mat depth_frame(height, width, CV_16UC1, (void*)map.data);

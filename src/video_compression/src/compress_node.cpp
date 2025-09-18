@@ -23,7 +23,7 @@ public:
         bitrate_ = this->declare_parameter<int>("bitrate", 2000);
         compression_ = this->declare_parameter<std::string>("compression", "h265");
 
-        if (mode_ != "color" && mode_ != "depth_rgb" && mode_ != "depth_yuv" && mode_ != "depth_yuv_12" && mode_ != "gray") {
+        if (mode_ != "color" && mode_ != "depth_rgb" && mode_ != "depth_yuv" && mode_ != "depth_yuv_12") {
             RCLCPP_ERROR(this->get_logger(), "Invalid mode specified: %s. Supported modes are: color, depth_rgb, depth_yuv, depth_yuv_12", mode_.c_str());
             throw std::runtime_error("Invalid mode specified.");
         }
@@ -32,16 +32,22 @@ public:
             throw std::runtime_error("Invalid compression specified.");
         }
 
+        depth_mode = false;
+
         if (mode_ == "color") {
             format_ = "I420";
         } else if (mode_ == "depth_rgb") {
             format_ = "I420";
+            depth_mode = true;
+            depth_rgb = new uint8_t[width_ * height_ * 3];
         } else if (mode_ == "depth_yuv") {
-            format_ = "Y444";
-        } else if (mode_ == "depth_yuv_8") {
             format_ = "YUY2";
+            depth_mode = true;
+            depth_yuv = new uint8_t[width_ * height_ * 4];
         } else if (mode_ == "depth_yuv_12") {
             format_ = "Y444_12LE";
+            depth_mode = true;
+            depth_yuv_12 = new uint16_t[width_ * height_ * 3];
         }
 
         gst_init(nullptr, nullptr);
@@ -111,45 +117,33 @@ public:
         if (zmq_thread_.joinable()) {
             zmq_thread_.join();
         }
+        if (depth_rgb) {
+            delete[] depth_rgb;
+        }
+        if (depth_yuv) {
+            delete[] depth_yuv;
+        }
+        if (depth_yuv_12) {
+            delete[] depth_yuv_12;
+        }
     }
 
 private:
     std::string zmq_url_, mode_, format_, compression_;
     int width_, height_, rate_, bitrate_;
+    bool depth_mode;
     GstElement *pipeline_{nullptr}, *appsrc_{nullptr}, *appsink_{nullptr};
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr publisher_;
     std::thread zmq_thread_;
     size_t zmq_msg_count_ = 0; // ZMQ message counter
     size_t ros_msg_count_ = 0; // ROS message counter
 
+    uint8_t *depth_rgb = nullptr;
+    uint8_t *depth_yuv = nullptr;
+    uint16_t *depth_yuv_12 = nullptr;
+
     std::vector<std::vector<uint8_t>> parameter_sets;   // VPS, SPS, PPS parameter sets
     bool extracted_parameter_sets = false;
-
-    static constexpr uint8_t Y_TABLE[8] = {0, 36, 73, 109, 146, 182, 219, 255};
-    static constexpr uint8_t UV_TABLE[4][2] = {
-        {64, 192},  // (0,0)
-        {192, 64},  // (0,1)
-        {32, 224},  // (1,0)
-        {224, 32}   // (1,1)
-    };
-
-    void encode_8bit_to_yuv422(const uint8_t gray, uint8_t *yuv)
-    {
-        uint8_t y0_code = (gray >> 5) & 0x07;
-        uint8_t y1_code = (gray >> 2) & 0x07;
-        uint8_t ubit     = (gray >> 1) & 0x01;
-        uint8_t vbit     =  gray       & 0x01;
-
-        uint8_t Y0 = Y_TABLE[y0_code];
-        uint8_t Y1 = Y_TABLE[y1_code];
-        uint8_t U  = UV_TABLE[(ubit << 1) | vbit][0];
-        uint8_t V  = UV_TABLE[(ubit << 1) | vbit][1];
-
-        yuv[0] = Y0;
-        yuv[1] = U;
-        yuv[2] = Y1;
-        yuv[3] = V;
-    }
 
     void zmq_listener() {
         RCLCPP_INFO(this->get_logger(), "Listening for ZMQ messages on %s", zmq_url_.c_str());
@@ -160,71 +154,43 @@ private:
         zmq_setsockopt(socket, ZMQ_CONFLATE, &conflate, sizeof(conflate));
         zmq_setsockopt(socket, ZMQ_SUBSCRIBE, "", 0);
 
-        uint8_t* depth_rgb = nullptr;
-        uint8_t* depth_yuv = nullptr;
-        uint8_t* depth_yuv_8 = nullptr;
-        uint16_t* depth_yuv_12 = nullptr;
-        if (mode_ == "depth_rgb") {
-            depth_rgb = new uint8_t[width_ * height_ * 3];
-        }
-        else if (mode_ == "depth_yuv") {
-            depth_yuv = new uint8_t[width_ * height_ * 3];
-        }
-        else if (mode_ == "depth_yuv_8") {
-            depth_yuv_8 = new uint8_t[width_ * height_ * 4];
-        }
-        else if (mode_ == "depth_yuv_12") {
-            depth_yuv_12 = new uint16_t[width_ * height_ * 3];
-        }
-
         while (rclcpp::ok()) {
             zmq_msg_t msg;
             zmq_msg_init(&msg);
             int rc = zmq_msg_recv(&msg, socket, 0);
+
             if (rc >= 0) {
                 size_t size = zmq_msg_size(&msg);
+                if (depth_mode && (size != width_ * height_ * 2)) {
+                    RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
+                    continue;
+                }
+                if (!depth_mode && (size != width_ * height_ * 3)) {
+                    RCLCPP_ERROR(this->get_logger(), "Received color data size mismatch: expected %d, got %ld", width_ * height_ * 3, size);
+                    continue;
+                }
                 void* data = zmq_msg_data(&msg);
+
                 ++zmq_msg_count_;
                 if (zmq_msg_count_ % 100 == 0) {
                     RCLCPP_INFO(this->get_logger(), "Received %zu ZMQ messages. Actual size: %ld", zmq_msg_count_, size);
                 }
 
                 if (mode_ == "depth_rgb") {
-                    if (size != width_ * height_ * 2) {
-                        RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
-                        continue;
-                    }
-                    uint8_t* ddata = static_cast<uint8_t*>(zmq_msg_data(&msg));
+                    uint16_t* ddata = static_cast<uint16_t*>(zmq_msg_data(&msg));
                     depth_encoding::depth_to_rgb(ddata, depth_rgb, width_, height_);
                     data = static_cast<void*>(depth_rgb);
                     size = width_ * height_ * 3;
                 }
                 else if (mode_ == "depth_yuv") {
-                    if (size != width_ * height_ * 2) {
-                        RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
-                        continue;
-                    }
-                    uint8_t* ddata = static_cast<uint8_t*>(zmq_msg_data(&msg));
+                    uint16_t* ddata = static_cast<uint16_t*>(zmq_msg_data(&msg));
                     depth_encoding::depth_to_yuv(ddata, depth_yuv, width_, height_);
                     data = static_cast<void*>(depth_yuv);
-                    size = width_ * height_ * 3;
-                }
-                else if (mode_ == "depth_yuv_8") {
-                    if (size != width_ * height_ * 2) {
-                        RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
-                        continue;
-                    }
-                    uint16_t* ddata = static_cast<uint16_t*>(zmq_msg_data(&msg));
-                    depth_encoding::depth_to_yuv_8(ddata, depth_yuv_8, width_, height_);
-                    data = static_cast<void*>(depth_yuv_8);
                     size = width_ * height_ * 4;
                 }
                 else if (mode_ == "depth_yuv_12") {
-                    if (size != width_ * height_ * 2) {
-                        RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
-                        continue;
-                    }
-                    depth_encoding::depth_to_yuv_12(data, depth_yuv_12, width_, height_);
+                    uint16_t* ddata = static_cast<uint16_t*>(zmq_msg_data(&msg));
+                    depth_encoding::depth_to_yuv_12(ddata, depth_yuv_12, width_, height_);
                     data = static_cast<void*>(depth_yuv_12);
                     size = width_ * height_ * 3 * 2;
                 }
@@ -240,18 +206,6 @@ private:
         }
         zmq_close(socket);
         zmq_ctx_term(context);
-        if (depth_rgb) {
-            delete[] depth_rgb;
-        }
-        if (depth_yuv) {
-            delete[] depth_yuv;
-        }
-        if (depth_yuv_8) {
-            delete[] depth_yuv_8;
-        }
-        if (depth_yuv_12) {
-            delete[] depth_yuv_12;
-        }
     }
 
     static GstFlowReturn on_new_sample_static(GstAppSink *sink, gpointer user_data) {

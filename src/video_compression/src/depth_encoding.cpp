@@ -57,9 +57,9 @@ void encode_12bit_to_rgb(uint16_t data, uint8_t *rgb)
     uint8_t r4 = (data >> 8) & 0xF;
     uint8_t g4 = (data >> 4) & 0xF;
     uint8_t b4 = data & 0xF;
-    rgb[0] = LUT_4TO8(r4);
-    rgb[1] = LUT_4TO8(g4);
-    rgb[2] = LUT_4TO8(b4);
+    rgb[0] = LUT_4TO8[r4];
+    rgb[1] = LUT_4TO8[g4];
+    rgb[2] = LUT_4TO8[b4];
 }
 
 void decode_12bit_from_rgb(const uint8_t* rgb, uint16_t* data)
@@ -109,4 +109,6 @@ void depth_to_yuv_12(const uint16_t* ddata, uint16_t* depth_yuv_12, int width, i
 {
     std::memcpy(depth_yuv_12, ddata, width * height * 2);
     std::fill(depth_yuv_12 + width * height, depth_yuv_12 + 3 * width * height, 0x0000);
+}
+
 }
