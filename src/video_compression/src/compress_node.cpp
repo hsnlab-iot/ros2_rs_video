@@ -61,7 +61,7 @@ public:
         } else if (compression_ == "rpi_h264") {
             pipeline_ss
                 << "v4l2h264enc extra-controls=\"controls,video_bitrate=" << bitrate_ * 1000
-                << ",video_bitrate_mode=1,h264_i_frame_period=15,repeat_sequence_header=1\" ! "
+                << ",video_bitrate_mode=1,h264_i_frame_period=15,repeat_sequence_header=1\" ! video/x-h264,level=(string)4 ! "
                 << "h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=nal ! ";
         }
 
