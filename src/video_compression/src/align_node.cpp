@@ -1,81 +1,32 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include <Eigen/Dense>
 #include <fstream>
 #include <string>
 #include <vector>
-#include <yaml-cpp/yaml.h>
 
 using std::placeholders::_1;
 
 struct CameraIntrinsics {
     float fx, fy, cx, cy;
+    bool valid = false;
+    
+    void set_from_camera_info(const sensor_msgs::msg::CameraInfo::SharedPtr& info) {
+        if (info && info->k.size() >= 9) {
+            fx = info->k[0];  // K[0,0]
+            fy = info->k[4];  // K[1,1]
+            cx = info->k[2];  // K[0,2]
+            cy = info->k[5];  // K[1,2]
+            valid = true;
+            RCLCPP_INFO(rclcpp::get_logger("align_node"), 
+                       "Updated intrinsics: fx=%.2f, fy=%.2f, cx=%.2f, cy=%.2f", 
+                       fx, fy, cx, cy);
+        }
+    }
 };
-
-CameraIntrinsics load_intrinsics(const std::string& filename) {
-    CameraIntrinsics intr;
-    
-    try {
-        YAML::Node config = YAML::LoadFile(filename);
-        
-        // Try different possible structures for camera calibration YAML files
-        if (config["camera_matrix"]) {
-            // Standard OpenCV calibration format
-            auto camera_matrix = config["camera_matrix"]["data"];
-            intr.fx = camera_matrix[0].as<float>();
-            intr.fy = camera_matrix[4].as<float>();
-            intr.cx = camera_matrix[2].as<float>();
-            intr.cy = camera_matrix[5].as<float>();
-        }
-        else if (config["camera_info"]) {
-            // ROS camera_info format
-            auto K = config["camera_info"]["K"];
-            intr.fx = K[0].as<float>();
-            intr.fy = K[4].as<float>();
-            intr.cx = K[2].as<float>();
-            intr.cy = K[5].as<float>();
-        }
-        else if (config["intrinsics"]) {
-            // Custom intrinsics format
-            intr.fx = config["intrinsics"]["fx"].as<float>();
-            intr.fy = config["intrinsics"]["fy"].as<float>();
-            intr.cx = config["intrinsics"]["cx"].as<float>();
-            intr.cy = config["intrinsics"]["cy"].as<float>();
-        }
-        else if (config["fx"] && config["fy"] && config["cx"] && config["cy"]) {
-            // Direct parameter format
-            intr.fx = config["fx"].as<float>();
-            intr.fy = config["fy"].as<float>();
-            intr.cx = config["cx"].as<float>();
-            intr.cy = config["cy"].as<float>();
-        }
-        else {
-            throw std::runtime_error("Unknown YAML format for camera intrinsics");
-        }
-        
-        RCLCPP_INFO(rclcpp::get_logger("align_node"), 
-                   "Loaded intrinsics from %s: fx=%.2f, fy=%.2f, cx=%.2f, cy=%.2f", 
-                   filename.c_str(), intr.fx, intr.fy, intr.cx, intr.cy);
-    }
-    catch (const YAML::Exception& e) {
-        RCLCPP_ERROR(rclcpp::get_logger("align_node"), 
-                    "Failed to load intrinsics from %s: %s", filename.c_str(), e.what());
-        // Set default values if loading fails
-        intr.fx = intr.fy = -1.0f;
-        intr.cx = intr.cy = -1.0f;
-    }
-    catch (const std::exception& e) {
-        RCLCPP_ERROR(rclcpp::get_logger("align_node"), 
-                    "Error loading intrinsics from %s: %s", filename.c_str(), e.what());
-        // Set default values if loading fails
-        intr.fx = intr.fy = -1.0f;
-        intr.cx = intr.cy = -1.0f;
-    }
-    
-    return intr;
-}
 
 class AlignNode : public rclcpp::Node {
 public:
@@ -83,18 +34,17 @@ public:
     : Node("align_node")
     {
         color_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-            "color/image", 10, std::bind(&AlignNode::color_callback, this, _1));
+            "color/image_raw", 10, std::bind(&AlignNode::color_callback, this, _1));
         depth_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-            "depth/image", 10, std::bind(&AlignNode::depth_callback, this, _1));
+            "depth/image_raw", 10, std::bind(&AlignNode::depth_callback, this, _1));
+        
+        // Subscribe to camera_info topics
+        color_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+            "color/camera_info", 10, std::bind(&AlignNode::color_info_callback, this, _1));
+        depth_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+            "depth/camera_info", 10, std::bind(&AlignNode::depth_info_callback, this, _1));
+            
         aligned_depth_pub_ = this->create_publisher<sensor_msgs::msg::Image>("aligned_depth/image", 10);
-
-        // Load intrinsics and translation
-        color_intr_ = load_intrinsics("calibration_color.yaml");
-        depth_intr_ = load_intrinsics("calibration_depth.yaml");
-        if (color_intr_.fx < 0 || depth_intr_.fx < 0) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to load camera intrinsics. Exiting.");
-            rclcpp::shutdown();
-        }
 
         this->declare_parameter<float>("tx", 1.0);
         this->declare_parameter<float>("ty", 0.0);
@@ -103,6 +53,8 @@ public:
         tx_ = this->get_parameter("tx").as_double();
         ty_ = this->get_parameter("ty").as_double();
         tz_ = this->get_parameter("tz").as_double();
+        
+        RCLCPP_INFO(this->get_logger(), "Align node started. Waiting for camera_info messages...");
     }
 
 private:
@@ -115,9 +67,26 @@ private:
         depth_msg_ = msg;
         try_align();
     }
+    
+    void color_info_callback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+        color_intr_.set_from_camera_info(msg);
+    }
+    
+    void depth_info_callback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+        depth_intr_.set_from_camera_info(msg);
+    }
 
     void try_align() {
         if (!color_msg_ || !depth_msg_) return;
+        
+        // Check if we have valid intrinsics
+        if (!color_intr_.valid || !depth_intr_.valid) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, 
+                                 "Waiting for camera intrinsics. Color valid: %s, Depth valid: %s",
+                                 color_intr_.valid ? "true" : "false",
+                                 depth_intr_.valid ? "true" : "false");
+            return;
+        }
 
         cv_bridge::CvImagePtr cv_color = cv_bridge::toCvCopy(color_msg_, "bgr8");
         cv_bridge::CvImagePtr cv_depth = cv_bridge::toCvCopy(depth_msg_, "16UC1");
@@ -163,6 +132,8 @@ private:
 
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr color_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr color_info_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr depth_info_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr aligned_depth_pub_;
 
     sensor_msgs::msg::Image::SharedPtr color_msg_;
