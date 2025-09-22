@@ -11,6 +11,7 @@ RUN apt-get update && \
         libgstreamer1.0-dev \
         libgstreamer-plugins-base1.0-dev \
         libzmq3-dev \
+        libeigen3-dev \
         python3-pkgconfig \
         pkg-config
 

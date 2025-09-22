@@ -6,12 +6,13 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZMQ REQUIRED libzmq)
 pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0)
 pkg_check_modules(GSTREAMER_APP REQUIRED gstreamer-app-1.0)
-find_package(cv_bridge REQUIRED)
-find_package(OpenCV REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 include_directories(
@@ -21,17 +22,20 @@ include_directories(
   ${GSTREAMER_APP_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${cv_bridge_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIRS}
 )
 
 # Create the executable
 add_executable(compress src/compress_node.cpp)
 add_executable(decompress src/decompress_node.cpp)
 add_executable(raw src/raw_node.cpp)
+add_executable(align src/align_node.cpp)
 add_library(depth_encoding src/depth_encoding.cpp)
 
 ament_target_dependencies(compress rclcpp sensor_msgs)
 ament_target_dependencies(decompress rclcpp sensor_msgs cv_bridge)
 ament_target_dependencies(raw rclcpp sensor_msgs)
+ament_target_dependencies(align rclcpp sensor_msgs cv_bridge OpenCV Eigen3)
 
 target_link_libraries(compress
   ${ZMQ_LIBRARIES}
@@ -51,12 +55,17 @@ target_link_libraries(raw
   ${ament_LIBRARIES}
   yaml-cpp
 )
+target_link_libraries(align
+  ${OpenCV_LIBRARIES}
+  yaml-cpp
+)
 
 # Install the executable
 install(TARGETS
   compress
   decompress
   raw
+  align
   DESTINATION lib/${PROJECT_NAME}
 )
 
