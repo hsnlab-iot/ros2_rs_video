@@ -1,0 +1,26 @@
+image_width: 640
+image_height: 480
+camera_name: d435i_depth
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [392.753, 0.0, 322.577,
+         0.0, 392.753, 240.333,
+         0.0, 0.0, 1.0]
+distortion_model: plumb_bob   # Brown Conrady
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [392.753, 0.0, 322.577, 0.0,
+         0.0, 392.753, 240.333, 0.0,
+         0.0, 0.0, 1.0, 0.0]

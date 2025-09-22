@@ -44,6 +44,32 @@ def main(args=None):
     profile = rs_pipeline.start(config)
     align = rs.align(rs.stream.color)
 
+    depth_stream = profile.get_stream(rs.stream.depth)  # rs.stream.depth
+    color_stream = profile.get_stream(rs.stream.color)  # rs.stream.color
+
+    depth_intrinsics = rs.video_stream_profile(depth_stream).get_intrinsics()
+    color_intrinsics = rs.video_stream_profile(color_stream).get_intrinsics()
+
+    print("Depth intrinsics:")
+    print(f"  width: {depth_intrinsics.width}, height: {depth_intrinsics.height}")
+    print(f"  fx: {depth_intrinsics.fx}, fy: {depth_intrinsics.fy}")
+    print(f"  cx: {depth_intrinsics.ppx}, cy: {depth_intrinsics.ppy}")
+    print(f"  distortion model: {depth_intrinsics.model}")
+    print(f"  coeffs: {depth_intrinsics.coeffs}")
+
+    print("\nColor intrinsics:")
+    print(f"  width: {color_intrinsics.width}, height: {color_intrinsics.height}")
+    print(f"  fx: {color_intrinsics.fx}, fy: {color_intrinsics.fy}")
+    print(f"  cx: {color_intrinsics.ppx}, cy: {color_intrinsics.ppy}")
+    print(f"  distortion model: {color_intrinsics.model}")
+    print(f"  coeffs: {color_intrinsics.coeffs}")
+
+    # Optional: get extrinsics from depth to color
+    extrinsics = depth_stream.get_extrinsics_to(color_stream)
+    print("\nDepth → Color extrinsics:")
+    print(f"  rotation: {extrinsics.rotation}")
+    print(f"  translation: {extrinsics.translation}")
+
     cc = cd = cs = ds = 0
 
     if not args.nodepth:
