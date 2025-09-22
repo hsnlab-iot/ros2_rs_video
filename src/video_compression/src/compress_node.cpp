@@ -22,6 +22,8 @@ public:
         rate_ = this->declare_parameter<int>("rate", 30);
         bitrate_ = this->declare_parameter<int>("bitrate", 2000);
         compression_ = this->declare_parameter<std::string>("compression", "h265");
+        custom_pipeline_ = this->declare_parameter<std::string>("pipeline", "");
+        custom_codec_ = this->declare_parameter<std::string>("codec", "");
 
         if (mode_ != "color" && mode_ != "depth_rgb" && mode_ != "depth_yuv" && mode_ != "depth_yuv_12") {
             RCLCPP_ERROR(this->get_logger(), "Invalid mode specified: %s. Supported modes are: color, depth_rgb, depth_yuv, depth_yuv_12", mode_.c_str());
@@ -53,32 +55,45 @@ public:
         gst_init(nullptr, nullptr);
 
         std::ostringstream pipeline_ss;
-        pipeline_ss
-            << "appsrc name=src ! videoconvert ! "
-            << "video/x-raw,format=" << format_ << ",width=" << width_ << ",height=" << height_ << ",framerate=" << rate_ << "/1 ! ";
+        if (!custom_pipeline_.empty()) {
+            pipeline_ss << custom_pipeline_;
+        } else {
+            pipeline_ss
+                << "appsrc name=src is-live=true format=time do-timestamp=true ! videoconvert ! "
+                << "queue max-size-buffers=1 leaky=downstream ! "
+                << "video/x-raw,format=" << format_ << ",width=" << width_ << ",height=" << height_ << ",framerate=" << rate_ << "/1 ! ";
 
-        if (compression_ == "h265") {
+            if (!custom_codec_.empty()) {
+                pipeline_ss << custom_codec_ << " ! ";
+            } else {
+                if (compression_ == "h265") {
+                    pipeline_ss
+                        << "x265enc tune=zerolatency bitrate=" << bitrate_ << " speed-preset=ultrafast key-int-max=15 ! "
+                        << "video/x-h265,stream-format=byte-stream,alignment=au ! ";
+                } else if (compression_ == "h264") {
+                    pipeline_ss
+                        << "x264enc tune=zerolatency bitrate=" << bitrate_ << " speed-preset=ultrafast b-adapt=false key-int-max=15 sliced-threads=true byte-stream=true ! "
+                        << "video/x-h264,profile=main,stream-format=byte-stream,alignment=nal ! ";
+                } else if (compression_ == "rpi_h264") {
+                    pipeline_ss
+                        << "v4l2h264enc output-io-mode=mmap capture-io-mode=mmap extra-controls=\"controls,video_bitrate=" << bitrate_ * 1000
+                        << ",video_bitrate_mode=1,h264_i_frame_period=15,repeat_sequence_header=1\" ! video/x-h264,level=(string)4 ! "
+                        << "queue max-size-buffers=16 leaky=downstream ! "
+                        << "h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=nal ! ";
+                }
+            }
+
             pipeline_ss
-                << "x265enc tune=zerolatency bitrate=" << bitrate_ << " speed-preset=ultrafast key-int-max=15 ! "
-                << "video/x-h265,stream-format=byte-stream,alignment=au ! ";
-        } else if (compression_ == "h264") {
-            pipeline_ss
-                << "x264enc tune=zerolatency bitrate=" << bitrate_ << " speed-preset=ultrafast b-adapt=false key-int-max=15 sliced-threads=true byte-stream=true ! "
-                << "video/x-h264,profile=main,stream-format=byte-stream,alignment=nal ! ";
-        } else if (compression_ == "rpi_h264") {
-            pipeline_ss
-                << "v4l2h264enc extra-controls=\"controls,video_bitrate=" << bitrate_ * 1000
-                << ",video_bitrate_mode=1,h264_i_frame_period=15,repeat_sequence_header=1\" ! video/x-h264,level=(string)4 ! "
-                << "h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=nal ! ";
+                << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
         }
-
-        pipeline_ss
-            << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
 
         RCLCPP_INFO(this->get_logger(), "GStreamer pipeline: %s", pipeline_ss.str().c_str());
         pipeline_ = gst_parse_launch(pipeline_ss.str().c_str(), nullptr);
         appsrc_ = gst_bin_get_by_name(GST_BIN(pipeline_), "src");
         appsink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "sink");
+        
+        // Get the bus from the pipeline for message handling
+        bus_ = gst_pipeline_get_bus(GST_PIPELINE(pipeline_));
         
         if (!appsrc_ || !appsink_) {
             RCLCPP_ERROR(this->get_logger(), "GStreamer pipeline must contain named 'appsrc' and 'appsink' elements.");
@@ -106,11 +121,20 @@ public:
 
         publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("video/h264", 3);
 
+        // Set up timer to check bus messages periodically
+        bus_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(50),  // Check every 50ms
+            std::bind(&ZMQGStreamerPublisher::handle_bus_messages, this)
+        );
+
         zmq_thread_ = std::thread(&ZMQGStreamerPublisher::zmq_listener, this);
     }
 
     ~ZMQGStreamerPublisher() override {
         gst_element_set_state(pipeline_, GST_STATE_NULL);
+        if (bus_) {
+            gst_object_unref(bus_);
+        }
         gst_object_unref(appsrc_);
         gst_object_unref(appsink_);
         gst_object_unref(pipeline_);
@@ -129,11 +153,13 @@ public:
     }
 
 private:
-    std::string zmq_url_, mode_, format_, compression_;
+    std::string zmq_url_, mode_, format_, compression_, custom_pipeline_, custom_codec_;
     int width_, height_, rate_, bitrate_;
     bool depth_mode;
     GstElement *pipeline_{nullptr}, *appsrc_{nullptr}, *appsink_{nullptr};
+    GstBus *bus_{nullptr};
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr publisher_;
+    rclcpp::TimerBase::SharedPtr bus_timer_;
     std::thread zmq_thread_;
     size_t zmq_msg_count_ = 0; // ZMQ message counter
     size_t ros_msg_count_ = 0; // ROS message counter
@@ -144,6 +170,31 @@ private:
 
     std::vector<std::vector<uint8_t>> parameter_sets;   // VPS, SPS, PPS parameter sets
     bool extracted_parameter_sets = false;
+
+    void handle_bus_messages() {
+        while (true) {
+            GstMessage* msg = gst_bus_pop(bus_);
+            if (!msg) break;
+
+            switch (GST_MESSAGE_TYPE(msg)) {
+                case GST_MESSAGE_ERROR: {
+                    GError* err;
+                    gchar* debug_info;
+                    gst_message_parse_error(msg, &err, &debug_info);
+                    RCLCPP_ERROR(this->get_logger(), "GStreamer Error: %s", err->message);
+                    g_error_free(err);
+                    g_free(debug_info);
+                    break;
+                }
+                case GST_MESSAGE_EOS:
+                    RCLCPP_INFO(this->get_logger(), "GStreamer End-Of-Stream reached.");
+                    break;
+                default:
+                    break;
+            }
+            gst_message_unref(msg);
+        }
+    }
 
     void zmq_listener() {
         RCLCPP_INFO(this->get_logger(), "Listening for ZMQ messages on %s", zmq_url_.c_str());
