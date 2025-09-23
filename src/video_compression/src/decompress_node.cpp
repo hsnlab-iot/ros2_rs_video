@@ -25,6 +25,8 @@ public:
         camera_info_file_ = declare_parameter<std::string>("camera_info_file", "");
         mode_ = declare_parameter<std::string>("mode", "color");
         compression_ = declare_parameter<std::string>("compression", "h265");
+        custom_pipeline_ = this->declare_parameter<std::string>("pipeline", "");
+        custom_codec_ = this->declare_parameter<std::string>("codec", "");
 
         // Initialize GStreamer
         gst_init(nullptr, nullptr);
@@ -33,10 +35,14 @@ public:
             RCLCPP_ERROR(this->get_logger(), "Invalid mode specified: %s", mode_.c_str());
             throw std::runtime_error("Invalid mode specified.");
         }
-        if (compression_ != "h264" && compression_ != "h265") {
-            RCLCPP_ERROR(this->get_logger(), "Invalid compression specified: %s. Supported compressions are: h264, h265", compression_.c_str());
-            throw std::runtime_error("Invalid compression specified.");
+        if (custom_codec_.empty() && custom_pipeline_.empty()) {
+            if (compression_ != "h264" && compression_ != "h265") {
+                RCLCPP_ERROR(this->get_logger(), "Invalid compression specified: %s. Supported compressions are: h264, h265", compression_.c_str());
+                throw std::runtime_error("Invalid compression specified.");
+            }
         }
+
+        xwidth_ = width_; // xwidth_ is the actual width used in GStreamer pipeline
 
         if (mode_ == "color" || mode_ == "depth_rgb") {
             format_ = "RGB"; // RGB format for color and depth RGB
@@ -47,20 +53,28 @@ public:
         }
 
         std::ostringstream pipeline_ss;
-        pipeline_ss
-            << "appsrc name=src is-live=true format=time ! ";
+        if (!custom_pipeline_.empty()) {
+            pipeline_ss << custom_pipeline_;
+        } else {
+            pipeline_ss
+                << "appsrc name=src is-live=true format=time ! ";
 
-        if (compression_ == "h264") {
-            pipeline_ss << "h264parse ! avdec_h264 ! ";
-        } else if (compression_ == "h265") {
-            pipeline_ss << "h265parse ! avdec_h265 ! ";
+            if (!custom_codec_.empty()) {
+                pipeline_ss << custom_codec_ << " ! ";
+            } else {
+                if (compression_ == "h264") {
+                    pipeline_ss << "h264parse ! avdec_h264 ! ";
+                } else if (compression_ == "h265") {
+                    pipeline_ss << "h265parse ! avdec_h265 ! ";
+                }
+            }
+
+            pipeline_ss
+                << "videoconvert ! "
+                << "video/x-raw, format=" << format_ << " ! "
+                << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
         }
 
-        pipeline_ss
-            << "videoconvert ! "
-            << "video/x-raw, format=" << format_ << " ! "
-            << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
-        
         GError* error = nullptr;
         pipeline_ = gst_parse_launch(pipeline_ss.str().c_str(), &error);
         if (!pipeline_) {
@@ -72,7 +86,7 @@ public:
         appsrc_ = gst_bin_get_by_name(GST_BIN(pipeline_), "src");
         appsink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "sink");
 
-	std::string caps_str = "";
+	    std::string caps_str = "";
 
         if (compression_ == "h264") {
              caps_str = "video/x-h264, stream-format=byte-stream, alignment=nal, profile=main";
@@ -80,12 +94,15 @@ public:
              caps_str = "video/x-h265, stream-format=byte-stream, alignment=au";
         }
 	
-        caps_str += ", width=" + std::to_string(width_) + ", height=" +
+        caps_str += ", width=" + std::to_string(xwidth_) + ", height=" +
 	       	std::to_string(height_) + ", framerate=" + std::to_string(rate_) + "/1";
 
         GstCaps* caps = gst_caps_from_string(caps_str.c_str());
         g_object_set(G_OBJECT(appsrc_), "caps", caps, nullptr);
         gst_caps_unref(caps);
+
+        RCLCPP_INFO(this->get_logger(), "GStreamer pipeline: %s", pipeline_ss.str().c_str());
+        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline_), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline_dump");
 
         // Connect new-sample signal
         g_signal_connect(appsink_, "new-sample", G_CALLBACK(&GStreamerDecoder::on_new_sample_static), this);
@@ -118,6 +135,8 @@ public:
         }
         if (appsrc_) gst_object_unref(appsrc_);
         if (appsink_) gst_object_unref(appsink_);
+        
+        if (depth_data) delete[] depth_data;
     }
 
     void start() {
@@ -134,10 +153,10 @@ public:
 
 private:
     // Parameters
-    int width_, height_, rate_;
+    int width_, xwidth_, height_, rate_;
     std::string frame_name_;
     std::string camera_info_file_;
-    std::string mode_, format_, compression_;
+    std::string mode_, format_, compression_, custom_pipeline_, custom_codec_;
 
     // ROS
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
@@ -157,6 +176,9 @@ private:
     // Message counters
     size_t compressed_counter_ = 0;
     size_t raw_counter_ = 0;
+
+    // Depth data buffer
+    uint16_t* depth_data = nullptr;
 
     // Camera info loader
     bool load_camera_info(const std::string& file_path) {
@@ -230,24 +252,31 @@ private:
             return GST_FLOW_ERROR;
         }
 
+        // Allocate depth data buffer if not already allocated
+        if (mode_ != "color" && depth_data == nullptr) {
+            if (mode_ == "depth_yuv") {
+                depth_data = new uint16_t[width/2 * height]; 
+            }
+            depth_data = new uint16_t[width * height];
+        }
+
+        cv::Mat frame(height, width, CV_8UC3, (void*)map.data);
+        cv::Mat depth_frame(height, width, CV_16UC1, depth_data);
         try {
-            cv::Mat frame(height, width, CV_8UC3, (void*)map.data);
             sensor_msgs::msg::Image::SharedPtr ros_img;
             if (mode_ == "color") {
                 ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", frame).toImageMsg();
             } else if (mode_ == "depth_rgb") {
                 // Convert RGB back to 16-bit depth
-                cv::Mat depth_frame(height, width, CV_16UC1);
-                depth_encoding::rgb_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width, height);
+                depth_encoding::rgb_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width/2, height);
                 ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
             } else if (mode_ == "depth_yuv") {
                 // Convert YUV back to 16-bit depth
-                cv::Mat depth_frame(height, width, CV_16UC1);
                 depth_encoding::yuv_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width, height);
                 ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
             } else if (mode_ == "depth_yuv_12") {
-                cv::Mat depth_frame(height, width, CV_16UC1, (void*)map.data);
-                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
+                cv::Mat depth_frame_x(height, width, CV_16UC1, (void*)map.data);
+                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame_x).toImageMsg();
             } else {
                 RCLCPP_ERROR(this->get_logger(), "Unsupported mode: %s", mode_.c_str());
                 throw std::runtime_error("Unsupported mode in on_new_sample");

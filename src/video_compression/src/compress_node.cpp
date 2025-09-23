@@ -29,25 +29,33 @@ public:
             RCLCPP_ERROR(this->get_logger(), "Invalid mode specified: %s. Supported modes are: color, depth_rgb, depth_yuv, depth_yuv_12", mode_.c_str());
             throw std::runtime_error("Invalid mode specified.");
         }
-        if (compression_ != "h264" && compression_ != "h265" && compression_ != "rpi_h264") {
-            RCLCPP_ERROR(this->get_logger(), "Invalid compression specified: %s. Supported compressions are: h264, rpi_h264, h265", compression_.c_str());
-            throw std::runtime_error("Invalid compression specified.");
+        if (custom_codec_.empty() && custom_pipeline_.empty()) {
+            if (compression_ != "h264" && compression_ != "h265" && compression_ != "rpi_h264") {
+                RCLCPP_ERROR(this->get_logger(), "Invalid compression specified: %s. Supported compressions are: h264, rpi_h264, h265", compression_.c_str());
+                throw std::runtime_error("Invalid compression specified.");
+            }
         }
 
         depth_mode = false;
+        xwidth_ = width_;
 
         if (mode_ == "color") {
-            format_ = "I420";
+            rawformat_ = "RGB";
+            encformat_ = "I420";
         } else if (mode_ == "depth_rgb") {
-            format_ = "I420";
+            rawformat_ = "RGB";
+            encformat_ = "I420";
             depth_mode = true;
             depth_rgb = new uint8_t[width_ * height_ * 3];
         } else if (mode_ == "depth_yuv") {
-            format_ = "YUY2";
+            rawformat_ = "YUY2";
+            encformat_ = "YUY2";
             depth_mode = true;
             depth_yuv = new uint8_t[width_ * height_ * 4];
+            xwidth_ = width_ * 2; // YUY2 is doubles width
         } else if (mode_ == "depth_yuv_12") {
-            format_ = "Y444_12LE";
+            rawformat_ = "Y444_12LE";
+            encformat_ = "Y444_12LE";
             depth_mode = true;
             depth_yuv_12 = new uint16_t[width_ * height_ * 3];
         }
@@ -61,7 +69,7 @@ public:
             pipeline_ss
                 << "appsrc name=src is-live=true format=time do-timestamp=true ! videoconvert ! "
                 << "queue max-size-buffers=1 leaky=downstream ! "
-                << "video/x-raw,format=" << format_ << ",width=" << width_ << ",height=" << height_ << ",framerate=" << rate_ << "/1 ! ";
+                << "video/x-raw,format=" << encformat_ << ",width=" << xwidth_ << ",height=" << height_ << ",framerate=" << rate_ << "/1 ! ";
 
             if (!custom_codec_.empty()) {
                 pipeline_ss << custom_codec_ << " ! ";
@@ -87,7 +95,6 @@ public:
                 << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
         }
 
-        RCLCPP_INFO(this->get_logger(), "GStreamer pipeline: %s", pipeline_ss.str().c_str());
         pipeline_ = gst_parse_launch(pipeline_ss.str().c_str(), nullptr);
         appsrc_ = gst_bin_get_by_name(GST_BIN(pipeline_), "src");
         appsink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "sink");
@@ -100,20 +107,19 @@ public:
             throw std::runtime_error("Invalid GStreamer pipeline.");
         }
 
-        if (format_ == "I420") {
-            format_ = "RGB";
-        }
-
         GstCaps* caps = gst_caps_new_simple(
             "video/x-raw",
-            "format", G_TYPE_STRING, format_.c_str(),
-            "width", G_TYPE_INT, width_,
+            "format", G_TYPE_STRING, rawformat_.c_str(),
+            "width", G_TYPE_INT, xwidth_,
             "height", G_TYPE_INT, height_,
             "framerate", GST_TYPE_FRACTION, rate_, 1,
             NULL
         );
         g_object_set(appsrc_, "caps", caps, NULL);
         gst_caps_unref(caps);
+
+        RCLCPP_INFO(this->get_logger(), "GStreamer pipeline: %s", pipeline_ss.str().c_str());
+        GST_DEBUG_BIN_TO_DOT_FILE(GST_BIN(pipeline_), GST_DEBUG_GRAPH_SHOW_ALL, "pipeline_dump");
 
         g_signal_connect(appsink_, "new-sample", G_CALLBACK(&ZMQGStreamerPublisher::on_new_sample_static), this);
 
@@ -153,8 +159,8 @@ public:
     }
 
 private:
-    std::string zmq_url_, mode_, format_, compression_, custom_pipeline_, custom_codec_;
-    int width_, height_, rate_, bitrate_;
+    std::string zmq_url_, mode_, encformat_, rawformat_, compression_, custom_pipeline_, custom_codec_;
+    int width_, xwidth_, height_, rate_, bitrate_;
     bool depth_mode;
     GstElement *pipeline_{nullptr}, *appsrc_{nullptr}, *appsink_{nullptr};
     GstBus *bus_{nullptr};
