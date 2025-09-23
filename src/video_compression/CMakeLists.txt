@@ -31,11 +31,13 @@ add_executable(decompress src/decompress_node.cpp)
 add_executable(raw src/raw_node.cpp)
 add_executable(align src/align_node.cpp)
 add_library(depth_encoding src/depth_encoding.cpp)
+add_executable(test_node src/test_node.cpp)
 
 ament_target_dependencies(compress rclcpp sensor_msgs)
 ament_target_dependencies(decompress rclcpp sensor_msgs cv_bridge)
 ament_target_dependencies(raw rclcpp sensor_msgs)
 ament_target_dependencies(align rclcpp sensor_msgs cv_bridge OpenCV Eigen3)
+ament_target_dependencies(test_node rclcpp sensor_msgs cv_bridge)
 
 target_link_libraries(compress
   ${ZMQ_LIBRARIES}
@@ -59,6 +61,9 @@ target_link_libraries(align
   ${OpenCV_LIBRARIES}
   yaml-cpp
 )
+target_link_libraries(test_node
+  ${OpenCV_LIBRARIES}
+)
 
 # Install the executable
 install(TARGETS
@@ -66,6 +71,7 @@ install(TARGETS
   decompress
   raw
   align
+  test_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
