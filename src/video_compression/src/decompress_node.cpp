@@ -57,7 +57,7 @@ public:
             pipeline_ss << custom_pipeline_;
         } else {
             pipeline_ss
-                << "appsrc name=src is-live=true format=time ! ";
+                << "appsrc name=src is-live=true format=time block=true ! ";
 
             if (!custom_codec_.empty()) {
                 pipeline_ss << custom_codec_ << " ! ";
@@ -72,7 +72,9 @@ public:
             pipeline_ss
                 << "videoconvert ! "
                 << "video/x-raw, format=" << format_ << " ! "
+                << "queue max-size-buffers=2 max-size-bytes=2097152 max-size-time=100000000 ! "
                 << "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true";
+                //<< "fakesink"; // Use fakesink to avoid appsink blocking issues
         }
 
         GError* error = nullptr;
@@ -109,6 +111,7 @@ public:
 
         // Publishers
         image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/video/image_raw", rclcpp::SensorDataQoS());
+        //image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/video/image_raw", 10);
         camera_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/video/camera_info", 3);
 
         // Load camera info if provided
@@ -134,9 +137,11 @@ public:
             gst_object_unref(pipeline_);
         }
         if (appsrc_) gst_object_unref(appsrc_);
-        if (appsink_) gst_object_unref(appsink_);
-        
-        if (depth_data) delete[] depth_data;
+        if (appsink_) gst_object_unref(appsink_);        
+
+        if (ros_msg) {
+            ros_msg.reset();
+        }
     }
 
     void start() {
@@ -173,12 +178,13 @@ private:
     // cv_bridge
     cv_bridge::CvImage cv_image_;
 
+    sensor_msgs::msg::Image::SharedPtr ros_msg = nullptr;
+    int ros_msg_width_ = 0;
+    int ros_msg_height_ = 0;
+
     // Message counters
     size_t compressed_counter_ = 0;
     size_t raw_counter_ = 0;
-
-    // Depth data buffer
-    uint16_t* depth_data = nullptr;
 
     // Camera info loader
     bool load_camera_info(const std::string& file_path) {
@@ -246,57 +252,69 @@ private:
         gst_structure_get_int(s, "width", &width);
         gst_structure_get_int(s, "height", &height);
 
+        height = 100;
+
+        if (!ros_msg || ros_msg_width_ != width || ros_msg_height_ != height) {
+            if (ros_msg) {
+                ros_msg.reset();
+                RCLCPP_INFO(this->get_logger(), "Frame size changed: %dx%d", width, height);
+            }
+            RCLCPP_INFO(this->get_logger(), "Allocating new ROS Image message for size: %dx%d", width, height);
+            ros_msg_width_ = width;
+            ros_msg_height_ = height;
+            ros_msg = std::make_shared<sensor_msgs::msg::Image>();
+            ros_msg->height = height;
+            ros_msg->width = width;
+            ros_msg->encoding = "bgr8"; // Default encoding
+            ros_msg->is_bigendian = 0;
+            ros_msg->step = width * 3; // 3 bytes per pixel for bgr8
+            ros_msg->data.resize(ros_msg->step * ros_msg->height, 0);
+        }
+
+        ros_msg->header.stamp = this->now();
+        ros_msg->header.frame_id = frame_name_;
+
         GstMapInfo map;
-        if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
-            gst_sample_unref(sample);
-            return GST_FLOW_ERROR;
-        }
+        if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
 
-        // Allocate depth data buffer if not already allocated
-        if (mode_ != "color" && depth_data == nullptr) {
-            if (mode_ == "depth_yuv") {
-                depth_data = new uint16_t[width/2 * height]; 
+            cv::Mat frame(height, width, CV_8UC3, (void*)map.data);
+            try {
+                if (mode_ == "color") {
+                    std::memcpy(ros_msg->data.data(), map.data, ros_msg->data.size());
+                    //ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", frame).toImageMsg();
+                } else if (mode_ == "depth_rgb") {
+                    // Convert RGB back to 16-bit depth
+                    cv::Mat depth_frame = cv::Mat::zeros(height, width/2, CV_16UC1);
+                    depth_encoding::rgb_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width/2, height);
+                    //ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
+                } else if (mode_ == "depth_yuv") {
+                    // Convert YUV back to 16-bit depth
+                    cv::Mat depth_frame = cv::Mat::zeros(height, width, CV_16UC1);
+                    depth_encoding::yuv_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width, height);
+                    //ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
+                } else if (mode_ == "depth_yuv_12") {
+                    cv::Mat depth_frame_x(height, width, CV_16UC1, (void*)map.data);
+                    //ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame_x).toImageMsg();
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "Unsupported mode: %s", mode_.c_str());
+                    throw std::runtime_error("Unsupported mode in on_new_sample");
+                }
+
+                image_pub_->publish(*ros_msg);
+
+                raw_counter_++;
+                if (raw_counter_ % 100 == 0) {
+                    RCLCPP_INFO(this->get_logger(), "Raw output messages published: %zu", raw_counter_);
+                }
+            } catch (...) {
+                // Handle exceptions
+                RCLCPP_ERROR(this->get_logger(), "Exception occurred during frame processing.");
             }
-            depth_data = new uint16_t[width * height];
-        }
 
-        cv::Mat frame(height, width, CV_8UC3, (void*)map.data);
-        cv::Mat depth_frame(height, width, CV_16UC1, depth_data);
-        try {
-            sensor_msgs::msg::Image::SharedPtr ros_img;
-            if (mode_ == "color") {
-                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", frame).toImageMsg();
-            } else if (mode_ == "depth_rgb") {
-                // Convert RGB back to 16-bit depth
-                depth_encoding::rgb_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width/2, height);
-                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
-            } else if (mode_ == "depth_yuv") {
-                // Convert YUV back to 16-bit depth
-                depth_encoding::yuv_to_depth(frame.ptr<uint8_t>(), depth_frame.ptr<uint16_t>(), width, height);
-                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame).toImageMsg();
-            } else if (mode_ == "depth_yuv_12") {
-                cv::Mat depth_frame_x(height, width, CV_16UC1, (void*)map.data);
-                ros_img = cv_bridge::CvImage(std_msgs::msg::Header(), "16UC1", depth_frame_x).toImageMsg();
-            } else {
-                RCLCPP_ERROR(this->get_logger(), "Unsupported mode: %s", mode_.c_str());
-                throw std::runtime_error("Unsupported mode in on_new_sample");
-            }
-
-            ros_img->header.stamp = this->now();
-            ros_img->header.frame_id = frame_name_;
-            image_pub_->publish(*ros_img);
-
-            raw_counter_++;
-            if (raw_counter_ % 100 == 0) {
-                RCLCPP_INFO(this->get_logger(), "Raw output messages published: %zu", raw_counter_);
-            }
-        } catch (...) {
             gst_buffer_unmap(buffer, &map);
-            gst_sample_unref(sample);
-            return GST_FLOW_ERROR;
         }
 
-        gst_buffer_unmap(buffer, &map);
+        //gst_caps_unref(caps);
         gst_sample_unref(sample);
         return GST_FLOW_OK;
     }
