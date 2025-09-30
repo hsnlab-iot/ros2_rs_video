@@ -108,7 +108,12 @@ void yuv_to_depth(const uint8_t* depth_yuv, uint16_t* ddata, int width, int heig
 void depth_to_yuv_12(const uint16_t* ddata, uint16_t* depth_yuv_12, int width, int height)
 {
     std::memcpy(depth_yuv_12, ddata, width * height * 2);
-    std::fill(depth_yuv_12 + width * height, depth_yuv_12 + 3 * width * height, 0x0000);
+    std::memset(depth_yuv_12 + width * height * 2, width * height * 4, 0x00);
+}
+
+void yuv_12_to_depth(const uint16_t* depth_yuv_12, uint16_t* ddata, int width, int height)
+{
+    std::memcpy(ddata, depth_yuv_12, width * height * 2);
 }
 
 }
