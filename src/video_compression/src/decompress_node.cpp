@@ -18,8 +18,6 @@ public:
     GStreamerDecoder()
     : Node("gstreamer_decoder_node")
     {
-        width_ = declare_parameter<int>("width", 1280);
-        height_ = declare_parameter<int>("height", 720);
         rate_ = declare_parameter<int>("rate", 30);
         frame_name_ = declare_parameter<std::string>("frame_name", "camera");
         camera_info_file_ = declare_parameter<std::string>("camera_info_file", "");
@@ -41,8 +39,6 @@ public:
                 throw std::runtime_error("Invalid compression specified.");
             }
         }
-
-        xwidth = width_; // xwidth is the actual width used in GStreamer pipeline
 
         if (mode_ == "color" || mode_ == "depth_rgb") {
             format_ = "RGB"; // RGB format for color and depth RGB
@@ -104,10 +100,8 @@ public:
         } else if (compression_ == "h265" || compression_ == "hevc") {
              caps_str = "video/x-h265, stream-format=byte-stream, alignment=au";
         }
-	
-        caps_str += ", width=" + std::to_string(xwidth) + ", height=" +
-	       	std::to_string(height_) + ", framerate=" + std::to_string(rate_) + "/1";
 
+        // Size does not matter here, will be set by appsink
         GstCaps* caps = gst_caps_from_string(caps_str.c_str());
         g_object_set(G_OBJECT(appsrc), "caps", caps, nullptr);
         gst_caps_unref(caps);
@@ -168,7 +162,7 @@ public:
 private:
     // Parameters
     std::string mode_, format_, compression_, custom_pipeline_, custom_codec_;
-    int width_, height_, rate_;
+    int rate_;
     std::string frame_name_, camera_info_file_;
 
     bool depth_mode = false;
