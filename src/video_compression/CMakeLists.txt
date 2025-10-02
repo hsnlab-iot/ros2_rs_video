@@ -14,6 +14,7 @@ pkg_check_modules(ZMQ REQUIRED libzmq)
 pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0)
 pkg_check_modules(GSTREAMER_APP REQUIRED gstreamer-app-1.0)
 find_package(yaml-cpp REQUIRED)
+find_package(stamped_code_msgs REQUIRED)
 
 include_directories(
   include
@@ -25,34 +26,50 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
 )
 
-# Create the executable
+# Create the library targets
+add_library(depth_encoding src/depth_encoding.cpp)
+add_library(image_marking src/image_marking.cpp)
+
+# make headers available
+target_include_directories(depth_encoding PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_include_directories(image_marking PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+# image_marking uses rclcpp::Time -> add dependency
+ament_target_dependencies(image_marking rclcpp)
+
+# Create the executables
 add_executable(compress src/compress_node.cpp)
 add_executable(decompress src/decompress_node.cpp)
 add_executable(raw src/raw_node.cpp)
 add_executable(align src/align_node.cpp)
-add_library(depth_encoding src/depth_encoding.cpp)
-add_library(image_mark src/image_mark.cpp)
 add_executable(test_node src/test_node.cpp)
 
 ament_target_dependencies(compress rclcpp sensor_msgs)
-ament_target_dependencies(decompress rclcpp sensor_msgs cv_bridge)
+ament_target_dependencies(decompress rclcpp sensor_msgs cv_bridge stamped_code_msgs)
 ament_target_dependencies(raw rclcpp sensor_msgs)
 ament_target_dependencies(align rclcpp sensor_msgs cv_bridge OpenCV Eigen3)
 ament_target_dependencies(test_node rclcpp sensor_msgs cv_bridge)
 
+# Link libraries (use the new image_marking target)
 target_link_libraries(compress
   ${ZMQ_LIBRARIES}
   ${GSTREAMER_LIBRARIES}
   ${GSTREAMER_APP_LIBRARIES}
   depth_encoding
-  image_mark
+  image_marking
 )
 target_link_libraries(decompress
   ${GSTREAMER_LIBRARIES}
   ${GSTREAMER_APP_LIBRARIES}
   ${OpenCV_LIBRARIES}
   depth_encoding
-  image_mark
+  image_marking
   yaml-cpp
 )
 target_link_libraries(raw

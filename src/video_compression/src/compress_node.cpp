@@ -8,7 +8,7 @@
 #include <cstring>
 
 #include "depth_encoding.h"
-#include "image_mark.h"
+#include "image_marking.h"
 
 
 class ZMQGStreamerPublisher : public rclcpp::Node {
@@ -27,6 +27,7 @@ public:
         compression_ = this->declare_parameter<std::string>("compression", "h265");
         custom_pipeline_ = this->declare_parameter<std::string>("pipeline", "");
         custom_codec_ = this->declare_parameter<std::string>("codec", "");
+        embed_ = this->declare_parameter<std::string>("embed", "none");
 
         if (mode_ != "color" && mode_ != "depth_rgb" && mode_ != "depth_yuv" && mode_ != "depth_yuv_12") {
             RCLCPP_ERROR(this->get_logger(), "Invalid mode specified: %s. Supported modes are: color, depth_rgb, depth_yuv, depth_yuv_12", mode_.c_str());
@@ -37,6 +38,14 @@ public:
                 RCLCPP_ERROR(this->get_logger(), "Invalid compression specified: %s. Supported compressions are: h264, rpi_h264, h265", compression_.c_str());
                 throw std::runtime_error("Invalid compression specified.");
             }
+        }
+        static const std::vector<std::string> embed_mode_names = { "none", "sequence", "time", "mix" };
+        auto it = std::find(embed_mode_names.begin(), embed_mode_names.end(), embed_);
+        if (it != embed_mode_names.end()) {
+            embed_mode = static_cast<int>(std::distance(embed_mode_names.begin(), it));
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Invalid embed mode specified: %s. Supported modes are: none, sequence, time, mix", embed_.c_str());
+            throw std::runtime_error("Invalid embed mode specified.");
         }
 
         depth_mode = false;
@@ -162,16 +171,18 @@ public:
     }
 
 private:
-    std::string zmq_url_, mode_, encformat_, rawformat_, compression_, custom_pipeline_, custom_codec_;
+    std::string zmq_url_, mode_, encformat_, rawformat_, compression_, custom_pipeline_, custom_codec_, embed_;
     int width_, xwidth_, height_, rate_, bitrate_;
     bool depth_mode;
+    enum EmbedMode { EMBED_NONE = 0, EMBED_SEQUENCE, EMBED_TIME, EMBED_MIX };
+    int embed_mode = 0; // 0: none, 1: sequence, 2: time, 3: mix
     GstElement *pipeline_{nullptr}, *appsrc_{nullptr}, *appsink_{nullptr};
     GstBus *bus_{nullptr};
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr publisher_;
     rclcpp::TimerBase::SharedPtr bus_timer_;
     std::thread zmq_thread_;
     size_t zmq_msg_count_ = 0; // ZMQ message counter
-    size_t ros_msg_count_ = 0; // ROS message counter
+    size_t ros_msg_count = 0; // ROS message counter
 
     uint8_t *depth_rgb = nullptr;
     uint8_t *depth_yuv = nullptr;
@@ -237,10 +248,21 @@ private:
                 }
 
                 // Embed frmae count code into the image
-                if (!depth_mode) {
-                    embed_code(static_cast<uint8_t*>(data), width_, height_, 3, ros_msg_count_);
-                } else {
-                    embed_code(static_cast<uint8_t*>(data), width_, height_, 2, ros_msg_count_);
+                if (embed_mode != EMBED_NONE) {
+                    uint32_t code = 0;
+                    if (embed_mode == EMBED_SEQUENCE) {
+                        code = static_cast<uint32_t>(ros_msg_count & 0xFFFFFFFF);
+                    } else if (embed_mode == EMBED_TIME) {
+                        code = image_marking::time_to_code32(this->now());
+                    } else if (embed_mode == EMBED_MIX) {
+                        code = static_cast<uint32_t>(((ros_msg_count & 0xFFFF) << 16) |
+                             (image_marking::time_to_code16(this->now()) & 0xFFFF));
+                    }
+                    if (!depth_mode) {
+                        image_marking::embed_code(static_cast<uint8_t*>(data), width_, height_, 3, code);
+                    } else {
+                        image_marking::embed_code(static_cast<uint8_t*>(data), width_, height_, 2, code);
+                    }
                 }
 
                 if (mode_ == "depth_rgb") {
@@ -343,9 +365,9 @@ private:
         }
         publisher_->publish(msg);
 
-        ++ros_msg_count_;
-        if (ros_msg_count_ % 100 == 0) {
-            RCLCPP_INFO(this->get_logger(), "Published %zu ROS messages", ros_msg_count_);
+        ++ros_msg_count;
+        if (ros_msg_count % 100 == 0) {
+            RCLCPP_INFO(this->get_logger(), "Published %zu ROS messages", ros_msg_count);
         }
 
         gst_buffer_unmap(buf, &map);

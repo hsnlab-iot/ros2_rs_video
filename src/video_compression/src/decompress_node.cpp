@@ -2,6 +2,7 @@
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <stamped_code_msgs/msg/stamped_code.hpp>
 #include <cv_bridge/cv_bridge.hpp>
 #include <opencv2/opencv.hpp>
 #include <yaml-cpp/yaml.h>
@@ -12,6 +13,7 @@
 #include <string>
 #include <vector>
 #include "depth_encoding.h"
+#include "image_marking.h"
 
 class GStreamerDecoder : public rclcpp::Node {
 public:
@@ -25,6 +27,7 @@ public:
         compression_ = declare_parameter<std::string>("compression", "h265");
         custom_pipeline_ = this->declare_parameter<std::string>("pipeline", "");
         custom_codec_ = this->declare_parameter<std::string>("codec", "");
+        embed_ = this->declare_parameter<std::string>("embed", "none");
 
         // Initialize GStreamer
         gst_init(nullptr, nullptr);
@@ -38,6 +41,17 @@ public:
                 RCLCPP_ERROR(this->get_logger(), "Invalid compression specified: %s. Supported compressions are: h264, h265", compression_.c_str());
                 throw std::runtime_error("Invalid compression specified.");
             }
+        }
+        static const std::vector<std::string> embed_mode_names = { "none", "sequence", "time", "mix" };
+        auto it = std::find(embed_mode_names.begin(), embed_mode_names.end(), embed_);
+        if (it != embed_mode_names.end()) {
+            embed_mode = static_cast<int>(std::distance(embed_mode_names.begin(), it));
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Invalid embed mode specified: %s. Supported modes are: none, sequence, time, mix", embed_.c_str());
+            throw std::runtime_error("Invalid embed mode specified.");
+        }
+        if (embed_mode != EMBED_NONE) {
+           stamped_code_pub = this->create_publisher<stamped_code_msgs::msg::StampedCode>("/video/stamped_code", rclcpp::SensorDataQoS());
         }
 
         if (mode_ == "color" || mode_ == "depth_rgb") {
@@ -113,9 +127,9 @@ public:
         g_signal_connect(appsink, "new-sample", G_CALLBACK(&GStreamerDecoder::on_new_sample_static), this);
 
         // Publishers
-        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/video/image_raw", rclcpp::SensorDataQoS());
-        //image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/video/image_raw", 10);
-        camera_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/video/camera_info", 3);
+        image_pub = this->create_publisher<sensor_msgs::msg::Image>("/video/image_raw", rclcpp::SensorDataQoS());
+        //image_pub = this->create_publisher<sensor_msgs::msg::Image>("/video/image_raw", 10);
+        camera_info_pub = this->create_publisher<sensor_msgs::msg::CameraInfo>("/video/camera_info", 3);
 
         // Load camera info if provided
         if (!camera_info_file_.empty()) {
@@ -126,7 +140,7 @@ public:
         }
 
         // Subscription
-        compressed_sub_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+        compressed_sub = this->create_subscription<sensor_msgs::msg::CompressedImage>(
             "/video/h264", rclcpp::SensorDataQoS(),
             std::bind(&GStreamerDecoder::compressed_callback, this, std::placeholders::_1)
         );
@@ -151,8 +165,8 @@ public:
         gst_element_set_state(pipeline, GST_STATE_PLAYING);
         RCLCPP_INFO(this->get_logger(), "GStreamer pipeline started.");
 
-        if (camera_info_) {
-            timer_ = this->create_wall_timer(
+        if (camera_info) {
+            timer = this->create_wall_timer(
                 std::chrono::seconds(1),
                 std::bind(&GStreamerDecoder::publish_camera_info, this)
             );
@@ -161,60 +175,60 @@ public:
 
 private:
     // Parameters
-    std::string mode_, format_, compression_, custom_pipeline_, custom_codec_;
+    std::string mode_, format_, compression_, custom_pipeline_, custom_codec_, embed_;
     int rate_;
     std::string frame_name_, camera_info_file_;
 
+    enum EmbedMode { EMBED_NONE = 0, EMBED_SEQUENCE, EMBED_TIME, EMBED_MIX };
+    int embed_mode = 0; // 0: none, 1: sequence, 2: time, 3: mix
     bool depth_mode = false;
     int xwidth;
 
     // ROS
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
-    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_sub_;
-    rclcpp::TimerBase::SharedPtr timer_;
-    std::shared_ptr<sensor_msgs::msg::CameraInfo> camera_info_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub;
+    rclcpp::Publisher<stamped_code_msgs::msg::StampedCode>::SharedPtr stamped_code_pub;
+    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_sub;
+    rclcpp::TimerBase::SharedPtr timer;
+    std::shared_ptr<sensor_msgs::msg::CameraInfo> camera_info;
 
     // GStreamer
     GstElement* pipeline = nullptr;
     GstElement* appsrc = nullptr;
     GstElement* appsink = nullptr;
 
-    // cv_bridge
-    cv_bridge::CvImage cv_image_;
-
     sensor_msgs::msg::Image::SharedPtr ros_msg = nullptr;
     int ros_msg_width = 0;
     int ros_msg_height = 0;
 
     // Message counters
-    size_t compressed_counter_ = 0;
-    size_t raw_counter_ = 0;
+    size_t compressed_counter = 0;
+    size_t raw_counter = 0;
 
     // Camera info loader
     bool load_camera_info(const std::string& file_path) {
         try {
             YAML::Node calib = YAML::LoadFile(file_path);
-            camera_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>();
-            camera_info_->width = calib["image_width"].as<int>();
-            camera_info_->height = calib["image_height"].as<int>();
+            camera_info = std::make_shared<sensor_msgs::msg::CameraInfo>();
+            camera_info->width = calib["image_width"].as<int>();
+            camera_info->height = calib["image_height"].as<int>();
 
             // Copy K (3x3)
             auto k_vec = calib["camera_matrix"]["data"].as<std::vector<double>>();
-            std::copy_n(k_vec.begin(), std::min<size_t>(k_vec.size(), camera_info_->k.size()), camera_info_->k.begin());
+            std::copy_n(k_vec.begin(), std::min<size_t>(k_vec.size(), camera_info->k.size()), camera_info->k.begin());
 
             // Copy D (variable length)
-            camera_info_->d = calib["distortion_coefficients"]["data"].as<std::vector<double>>();
+            camera_info->d = calib["distortion_coefficients"]["data"].as<std::vector<double>>();
 
             // Copy R (3x3)
             auto r_vec = calib["rectification_matrix"]["data"].as<std::vector<double>>();
-            std::copy_n(r_vec.begin(), std::min<size_t>(r_vec.size(), camera_info_->r.size()), camera_info_->r.begin());
+            std::copy_n(r_vec.begin(), std::min<size_t>(r_vec.size(), camera_info->r.size()), camera_info->r.begin());
 
             // Copy P (3x4)
             auto p_vec = calib["projection_matrix"]["data"].as<std::vector<double>>();
-            std::copy_n(p_vec.begin(), std::min<size_t>(p_vec.size(), camera_info_->p.size()), camera_info_->p.begin());
+            std::copy_n(p_vec.begin(), std::min<size_t>(p_vec.size(), camera_info->p.size()), camera_info->p.begin());
 
-            camera_info_->distortion_model = calib["distortion_model"].as<std::string>();
+            camera_info->distortion_model = calib["distortion_model"].as<std::string>();
             return true;
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error loading camera info: %s", e.what());
@@ -223,17 +237,17 @@ private:
     }
 
     void publish_camera_info() {
-        if (!camera_info_) return;
-        camera_info_->header.stamp = this->now();
-        camera_info_->header.frame_id = frame_name_;
-        camera_info_pub_->publish(*camera_info_);
+        if (!camera_info) return;
+        camera_info->header.stamp = this->now();
+        camera_info->header.frame_id = frame_name_;
+        camera_info_pub->publish(*camera_info);
     }
 
     void compressed_callback(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
         // Push compressed bytes to appsrc
-        compressed_counter_++;
-        if (compressed_counter_ % 100 == 0) {
-            RCLCPP_INFO(this->get_logger(), "Compressed input messages received: %zu", compressed_counter_);
+        compressed_counter++;
+        if (compressed_counter % 100 == 0) {
+            RCLCPP_INFO(this->get_logger(), "Compressed input messages received: %zu", compressed_counter);
         }
         GstBuffer* buffer = gst_buffer_new_allocate(nullptr, msg->data.size(), nullptr);
         gst_buffer_fill(buffer, 0, msg->data.data(), msg->data.size());
@@ -308,12 +322,38 @@ private:
                     throw std::runtime_error("Unsupported mode in on_new_sample");
                 }
 
-                image_pub_->publish(*ros_msg);
-
-                raw_counter_++;
-                if (raw_counter_ % 100 == 0) {
-                    RCLCPP_INFO(this->get_logger(), "Raw output messages published: %zu", raw_counter_);
+                if (embed_mode != EMBED_NONE && stamped_code_pub) {
+                    stamped_code_msgs::msg::StampedCode m;
+                    m.header = ros_msg->header; // or set stamp/frame explicitly
+                    float confidence = 0.0f;
+                    m.sequence = 0;
+                    m.stamp.sec = 0;
+                    m.stamp.nanosec = 0;
+                    uint32_t code = image_marking::detect_code(ros_msg->data.data(), xwidth, height, depth_mode ? 2 : 3, confidence);
+                    if (embed_mode == EMBED_SEQUENCE) {
+                        m.sequence = code;
+                    } else if (embed_mode == EMBED_TIME) {
+                        auto time = image_marking::code32_to_time(code, this->now());
+                        m.stamp.sec = time.seconds();
+                        m.stamp.nanosec = time.nanoseconds();
+                    } else if (embed_mode == EMBED_MIX) {
+                        m.sequence = (code >> 16) & 0xFFFF;
+                        auto time = image_marking::code16_to_time(static_cast<uint16_t>(code), this->now());
+                        m.stamp.sec = time.seconds();
+                        m.stamp.nanosec = time.nanoseconds();
+                    }
+                    m.confidence = confidence;
+                    stamped_code_pub->publish(m);
                 }
+
+                image_pub->publish(*ros_msg);
+
+                raw_counter++;
+                if (raw_counter % 100 == 0) {
+                    RCLCPP_INFO(this->get_logger(), "Raw output messages published: %zu", raw_counter);
+                }
+
+
             } catch (...) {
                 // Handle exceptions
                 RCLCPP_ERROR(this->get_logger(), "Exception occurred during frame processing.");
