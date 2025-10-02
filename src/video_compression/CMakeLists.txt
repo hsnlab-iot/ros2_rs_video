@@ -31,6 +31,7 @@ add_executable(decompress src/decompress_node.cpp)
 add_executable(raw src/raw_node.cpp)
 add_executable(align src/align_node.cpp)
 add_library(depth_encoding src/depth_encoding.cpp)
+add_library(image_mark src/image_mark.cpp)
 add_executable(test_node src/test_node.cpp)
 
 ament_target_dependencies(compress rclcpp sensor_msgs)
@@ -44,12 +45,14 @@ target_link_libraries(compress
   ${GSTREAMER_LIBRARIES}
   ${GSTREAMER_APP_LIBRARIES}
   depth_encoding
+  image_mark
 )
 target_link_libraries(decompress
   ${GSTREAMER_LIBRARIES}
   ${GSTREAMER_APP_LIBRARIES}
   ${OpenCV_LIBRARIES}
   depth_encoding
+  image_mark
   yaml-cpp
 )
 target_link_libraries(raw

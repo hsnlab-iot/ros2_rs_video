@@ -6,7 +6,10 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <cstring>
+
 #include "depth_encoding.h"
+#include "image_mark.h"
+
 
 class ZMQGStreamerPublisher : public rclcpp::Node {
 public:
@@ -231,6 +234,13 @@ private:
                 ++zmq_msg_count_;
                 if (zmq_msg_count_ % 100 == 0) {
                     RCLCPP_INFO(this->get_logger(), "Received %zu ZMQ messages. Actual size: %ld", zmq_msg_count_, size);
+                }
+
+                // Embed frmae count code into the image
+                if (!depth_mode) {
+                    embed_code(static_cast<uint8_t*>(data), width_, height_, 3, ros_msg_count_);
+                } else {
+                    embed_code(static_cast<uint8_t*>(data), width_, height_, 2, ros_msg_count_);
                 }
 
                 if (mode_ == "depth_rgb") {
