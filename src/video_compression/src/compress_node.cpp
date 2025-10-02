@@ -259,9 +259,9 @@ private:
                              (image_marking::time_to_code16(this->now()) & 0xFFFF));
                     }
                     if (!depth_mode) {
-                        image_marking::embed_code(static_cast<uint8_t*>(data), width_, height_, 3, code);
+                        image_marking::embed_code(static_cast<uint8_t*>(data), width_, 3, code);
                     } else {
-                        image_marking::embed_code(static_cast<uint8_t*>(data), width_, height_, 2, code);
+                        image_marking::embed_code(static_cast<uint8_t*>(data), width_, 2, code);
                     }
                 }
 

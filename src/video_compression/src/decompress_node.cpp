@@ -329,7 +329,12 @@ private:
                     m.sequence = 0;
                     m.stamp.sec = 0;
                     m.stamp.nanosec = 0;
-                    uint32_t code = image_marking::detect_code(ros_msg->data.data(), xwidth, height, depth_mode ? 2 : 3, confidence);
+                    uint32_t code;
+                    if (depth_mode) {
+                        code = image_marking::detect_code_word((uint16_t*) ros_msg->data.data(), xwidth, confidence);
+                    } else {
+                        code = image_marking::detect_code(ros_msg->data.data(), xwidth, 3, confidence);
+                    }
                     if (embed_mode == EMBED_SEQUENCE) {
                         m.sequence = code;
                     } else if (embed_mode == EMBED_TIME) {

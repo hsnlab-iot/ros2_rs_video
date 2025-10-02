@@ -10,10 +10,11 @@ namespace image_marking {
 // width, height: image dimensions
 // channels: number of channels (e.g., 3 for RGB)
 // code: 32-bit code to embed
-void embed_code(uint8_t* img, int width, int height, int channels, uint32_t code);
+void embed_code(uint8_t* img, int width, int channels, uint32_t code);
 
 // Try to detect the 32-bit code from the image (reverse of embed_code)
-uint32_t detect_code(const uint8_t* img, int width, int height, int channels, float& confidence);
+uint32_t detect_code(const uint8_t* img, int width, int channels, float& confidence);
+uint32_t detect_code_word(const uint16_t* img, int width, float& confidence);
 
 rclcpp::Time code16_to_time(uint16_t code, rclcpp::Time base_time);
 rclcpp::Time code32_to_time(uint32_t code, rclcpp::Time base_time);
