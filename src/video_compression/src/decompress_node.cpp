@@ -335,12 +335,12 @@ private:
                     } else if (embed_mode == EMBED_TIME) {
                         auto time = image_marking::code32_to_time(code, this->now());
                         m.stamp.sec = time.seconds();
-                        m.stamp.nanosec = time.nanoseconds();
+                        m.stamp.nanosec = time.nanoseconds() % 1000000000;
                     } else if (embed_mode == EMBED_MIX) {
                         m.sequence = (code >> 16) & 0xFFFF;
                         auto time = image_marking::code16_to_time(static_cast<uint16_t>(code), this->now());
                         m.stamp.sec = time.seconds();
-                        m.stamp.nanosec = time.nanoseconds();
+                        m.stamp.nanosec = time.nanoseconds() % 1000000000;
                     }
                     m.confidence = confidence;
                     stamped_code_pub->publish(m);

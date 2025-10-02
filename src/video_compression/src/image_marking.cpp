@@ -12,9 +12,9 @@ void embed_code(uint8_t* img, int width, int height, int channels, uint32_t code
         for (int b = 0; b < 32; ++b) {
             int idx = (r * width + b * pixel_per_bit) * channels;
             if ((code >> b) & 1)
-                for (int i = 0; i < pixel_per_bit * channels; ++i) img[idx + i] = 0;
-            else
                 for (int i = 0; i < pixel_per_bit * channels; ++i) img[idx + i] = 255;
+            else
+                for (int i = 0; i < pixel_per_bit * channels; ++i) img[idx + i] = 0;
         }
     }
 }
@@ -46,7 +46,7 @@ uint32_t detect_code(const uint8_t* img, int width, int height, int channels, fl
 uint16_t time_to_code16(rclcpp::Time time) {
     uint64_t sec = static_cast<uint64_t>(time.seconds());
     uint16_t sec_4 = static_cast<uint16_t>(sec & 0xF);
-    uint16_t msec = static_cast<uint16_t>((time.nanoseconds() / 1000000) & 0xFFF);
+    uint16_t msec = static_cast<uint16_t>(((time.nanoseconds() / 1000000) % 1000));
 
     return (sec_4 << 12) | msec;
 }
@@ -54,7 +54,7 @@ uint16_t time_to_code16(rclcpp::Time time) {
 uint32_t time_to_code32(rclcpp::Time time) {
     uint64_t sec = static_cast<uint64_t>(time.seconds());
     uint16_t sec_16 = static_cast<uint16_t>(sec & 0xFFFF);
-    uint16_t msec = static_cast<uint16_t>((time.nanoseconds() / 1000000) & 0xFFFF);
+    uint32_t msec = static_cast<uint32_t>(((time.nanoseconds() / 1000000) % 1000));
 
     return (static_cast<uint32_t>(sec_16) << 16) | msec;
 }
@@ -77,7 +77,7 @@ rclcpp::Time code16_to_time(uint16_t code, rclcpp::Time base_time) {
     sec += mod * 16;
     sec = (sec & -0xF) | c_sec_4;
 
-    return rclcpp::Time(sec, c_msec * 1000000);
+    return rclcpp::Time(sec, static_cast<uint32_t>(c_msec) * 1000000);
 }
 
 rclcpp::Time code32_to_time(uint32_t code, rclcpp::Time base_time) {
@@ -99,7 +99,7 @@ rclcpp::Time code32_to_time(uint32_t code, rclcpp::Time base_time) {
     sec += mod * 65536;
     sec = (sec & -0xFFFF) | c_sec_16;
 
-    return rclcpp::Time(sec, c_msec * 1000000);
+    return rclcpp::Time(sec, static_cast<uint32_t>(c_msec) * 1000000);
 }
 
 } // namespace image_marking
