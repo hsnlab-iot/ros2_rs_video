@@ -66,7 +66,7 @@ rclcpp::Time code16_to_time(uint16_t code, rclcpp::Time base_time) {
     uint64_t sec = static_cast<uint64_t>(base_time.seconds());
     uint8_t sec_4 = static_cast<uint8_t>(sec & 0xF);
 
-    uint8_t mod = 0;
+    int8_t mod = 0;
     if (c_sec_4 > sec_4 && ((c_sec_4 - sec_4) > 8)) {
         // we have wrapped around the 4-bit seconds
         mod = -1;
@@ -75,9 +75,9 @@ rclcpp::Time code16_to_time(uint16_t code, rclcpp::Time base_time) {
         mod = 1;
     }
     sec += mod * 16;
-    sec = (sec & -0xF) | c_sec_4;
+    sec = (sec & 0xFFFFFFF0) | c_sec_4;
 
-    return rclcpp::Time(sec, static_cast<uint32_t>(c_msec) * 1000000);
+    return rclcpp::Time(sec, static_cast<uint32_t>(c_msec) * 1000000, base_time.get_clock_type());
 }
 
 rclcpp::Time code32_to_time(uint32_t code, rclcpp::Time base_time) {
@@ -97,9 +97,9 @@ rclcpp::Time code32_to_time(uint32_t code, rclcpp::Time base_time) {
     }
 
     sec += mod * 65536;
-    sec = (sec & -0xFFFF) | c_sec_16;
+    sec = (sec & 0xFFFF0000) | c_sec_16;
 
-    return rclcpp::Time(sec, static_cast<uint32_t>(c_msec) * 1000000);
+    return rclcpp::Time(sec, static_cast<uint32_t>(c_msec) * 1000000, base_time.get_clock_type());
 }
 
 } // namespace image_marking
