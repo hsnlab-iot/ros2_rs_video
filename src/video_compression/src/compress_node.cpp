@@ -135,6 +135,7 @@ public:
 
         g_signal_connect(appsink_, "new-sample", G_CALLBACK(&ZMQGStreamerPublisher::on_new_sample_static), this);
 
+        gst_error = false;
         gst_element_set_state(pipeline_, GST_STATE_PLAYING);
 
         publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("video/h264", 3);
@@ -184,6 +185,8 @@ private:
     size_t zmq_msg_count_ = 0; // ZMQ message counter
     size_t ros_msg_count = 0; // ROS message counter
 
+    bool gst_error = false;
+
     uint8_t *depth_rgb = nullptr;
     uint8_t *depth_yuv = nullptr;
     uint16_t *depth_yuv_12 = nullptr;
@@ -202,6 +205,7 @@ private:
                     gchar* debug_info;
                     gst_message_parse_error(msg, &err, &debug_info);
                     RCLCPP_ERROR(this->get_logger(), "GStreamer Error: %s", err->message);
+                    gst_error = true;
                     g_error_free(err);
                     g_free(debug_info);
                     break;
@@ -225,7 +229,7 @@ private:
         zmq_setsockopt(socket, ZMQ_CONFLATE, &conflate, sizeof(conflate));
         zmq_setsockopt(socket, ZMQ_SUBSCRIBE, "", 0);
 
-        while (rclcpp::ok()) {
+        while (rclcpp::ok() && !gst_error) {
             zmq_msg_t msg;
             zmq_msg_init(&msg);
             int rc = zmq_msg_recv(&msg, socket, 0);
@@ -234,10 +238,12 @@ private:
                 size_t size = zmq_msg_size(&msg);
                 if (depth_mode && (size != width_ * height_ * 2)) {
                     RCLCPP_ERROR(this->get_logger(), "Received depth data size mismatch: expected %d, got %ld", width_ * height_ * 2, size);
+                    zmq_msg_close(&msg);
                     continue;
                 }
                 if (!depth_mode && (size != width_ * height_ * 3)) {
                     RCLCPP_ERROR(this->get_logger(), "Received color data size mismatch: expected %d, got %ld", width_ * height_ * 3, size);
+                    zmq_msg_close(&msg);
                     continue;
                 }
                 void* data = zmq_msg_data(&msg);
